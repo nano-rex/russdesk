@@ -30,7 +30,7 @@ jobs:
           pip install playwright==1.48.0
           python -m playwright install --with-deps chromium
       - name: UI test
-        run: python tests/test_ui.py
+        run: python tests/ui_test.py
         env:
           UI_SHOTS: ui-shots
       - uses: actions/upload-artifact@v4

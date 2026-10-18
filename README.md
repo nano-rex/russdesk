@@ -120,7 +120,7 @@ are sent empty, which returns them to the client's default.
 
 ```sh
 python3 -m unittest discover -s tests            # API tests (no dependencies)
-python3 tests/test_ui.py                         # browser test, needs Playwright + Chromium
+python3 tests/ui_test.py                         # browser test, needs Playwright + Chromium
 ```
 
 The tests replay the request shapes of the RustDesk client. No real RustDesk client was
