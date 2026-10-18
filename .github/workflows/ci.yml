@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: API tests
+        run: python -m unittest discover -s tests -v
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Playwright
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - name: UI test
+        run: python tests/test_ui.py
+        env:
+          UI_SHOTS: ui-shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots
+          path: ui-shots/
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke-test the image
+        run: |
+          docker build -t russdesk .
+          docker run -d --name rd -p 21114:21114 -e RUSSDESK_ADMIN_PASSWORD=ci-password-1 russdesk
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:21114/api/login-options && break; sleep 1; done
+          curl -sf -X POST http://127.0.0.1:21114/api/heartbeat -d '{"id":"1","uuid":"u","modified_at":0}'
+          docker logs rd
