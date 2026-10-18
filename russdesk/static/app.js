@@ -103,7 +103,7 @@ const optList = (list, none) => [["", none || "— none —"]].concat(list.map((
 const intOrNull = (v) => (v === "" || v === null ? null : parseInt(v, 10));
 
 function field(label, control, hint) {
-  return h("label", { class: "field" }, h("span", {}, label), control, hint ? h("div", { class: "hint" }, hint) : null);
+  return h("div", { class: "field" }, h("label", {}, h("span", {}, label), control), hint ? h("div", { class: "hint" }, hint) : null);
 }
 
 function copyButton(textFn) {

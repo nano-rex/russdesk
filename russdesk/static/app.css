@@ -164,8 +164,9 @@ input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
 .toolbar .grow { flex: 1; }
 
 .form { display: grid; gap: 12px; }
-.form label.field { display: grid; gap: 4px; }
-.form label.field > span { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+.form .field { display: grid; gap: 4px; }
+.form .field > label { display: grid; gap: 4px; }
+.form .field > label > span { font-size: 12.5px; color: var(--muted); font-weight: 500; }
 .form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form .check { display: flex; align-items: center; gap: 8px; }
 .form .hint { font-size: 12.5px; color: var(--muted); }
