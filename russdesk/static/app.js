@@ -381,10 +381,9 @@ function clientConfigPanel(cfg) {
   return h("div", { class: "panel" },
     h("h2", {}, "Connect a RustDesk client"),
     h("p", { class: "muted" }, "In RustDesk: Settings → Network → ID/Relay server. Fill in the ID server and key; leave the API server empty. Or copy the config string and use the clipboard import button."),
-    h("dl", { class: "kv" }, row("ID server", cfg.host), row("Relay server", cfg.relay),
+    h("dl", { class: "kv spaced" }, row("ID server", cfg.host), row("Relay server", cfg.relay),
       h("dt", {}, "API server"), h("dd", {}, cfg.api ? h("code", {}, cfg.api) : h("span", { class: "muted" }, "leave empty (the client uses " + (cfg.api_default || "http://<ID server>:21114") + ")")),
       row("Key", cfg.key)),
-    h("p", {}, ""),
     h("div", { class: "copy-box" }, h("code", {}, cfg.config_string), copyButton(() => cfg.config_string)),
     !cfg.key ? h("p", { class: "hint muted" }, "The key is empty: set it in Settings or point RUSSDESK_HBBS_KEY_FILE at hbbs' id_ed25519.pub.") : null);
 }
@@ -851,7 +850,7 @@ async function pageAddressBook(guid) {
     h("div", { class: "inline-list" }, b.tags.length ? b.tags.map((t) => h("span", { class: "split" }, tagChip(t.name),
       canWrite ? h("button", { class: "small link danger", onclick: async () => { await api("DELETE", `/address-books/${guid}/tags/${encodeURIComponent(t.name)}`); reload(); }, "aria-label": "Delete tag " + t.name }, "✕") : null)) : h("span", { class: "muted" }, "No tags")),
     canWrite ? h("form", { class: "toolbar", onsubmit: async (e) => { e.preventDefault(); if (!newTag.value.trim()) return; try { await api("POST", `/address-books/${guid}/tags`, { name: newTag.value.trim(), color: cssToArgb(newColor.value) }); reload(); } catch (err) { fail(err); } } },
-      h("p", {}), newTag, newColor, h("button", { type: "submit" }, "Add tag")) : null);
+      newTag, newColor, h("button", { type: "submit" }, "Add tag")) : null);
 
   const panels = [peersPanel, tagsPanel];
   if (!b.personal && full) {
@@ -876,7 +875,7 @@ async function pageAddressBook(guid) {
       drawRules();
     });
     panels.push(h("div", { class: "panel" }, h("h2", {}, "Sharing"), rulesEl,
-      h("div", { class: "toolbar" }, h("p", {}), who, h("div", { class: "grow" }),
+      h("div", { class: "toolbar" }, who, h("div", { class: "grow" }),
         h("button", { class: "primary", onclick: async () => { try { await api("PATCH", "/address-books/" + guid, { rules: rules.map((r) => ({ user_id: r.user_id || null, user_group_id: r.user_group_id || null, rule: r.rule })) }); toast("Sharing saved"); reload(); } catch (e) { fail(e); } } }, "Save sharing")),
       h("hr", {}),
       h("div", { class: "toolbar" },
