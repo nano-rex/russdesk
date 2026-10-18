@@ -27,6 +27,49 @@ worked out from the open-source client; see [docs/client-protocol.md](docs/clien
 Not included: OIDC/LDAP login, email verification codes, the web client, the custom client
 generator, and the Pro relay/ID server features (those live in Pro's `hbbs`, not in the console).
 
+## Install on a bare-metal Linux server
+
+Needs a systemd distribution (Debian/Ubuntu, RHEL/Rocky/Alma, Fedora, Arch…) with Python 3.10+.
+Nothing else is installed: no Docker, pip packages or database server.
+
+```sh
+git clone https://github.com/nano-rex/russdesk.git
+cd russdesk
+sudo ./deploy/install.sh --host rd.example.com      # your public DNS name or IP
+```
+
+The script:
+
+* downloads the official open-source `hbbs`/`hbbr` release for your CPU (x86-64, ARM64,
+  ARMv7, i386) into `/usr/local/bin`
+* installs RussDesk to `/opt/russdesk`
+* creates a `rustdesk` system user and three systemd services: `rustdesk-hbbs`,
+  `rustdesk-hbbr`, `russdesk` (sandboxed, restart on failure, start at boot)
+* writes `/etc/russdesk.env` and opens the ports in ufw or firewalld if one is active
+* prints the console address, the first admin password and the key for clients
+
+| Path | |
+| --- | --- |
+| `/var/lib/rustdesk-server/` | hbbs data and the **server key** (`id_ed25519`, `id_ed25519.pub`). Back it up; losing it means re-keying every client. |
+| `/var/lib/russdesk/russdesk.db` | Console database (users, devices, logs, address books). |
+| `/etc/russdesk.env` | RussDesk settings (see the table under *Without Docker*). |
+
+Day-to-day:
+
+```sh
+systemctl status russdesk rustdesk-hbbs rustdesk-hbbr
+journalctl -u russdesk -u rustdesk-hbbs -u rustdesk-hbbr -f
+git pull && sudo ./deploy/install.sh --host rd.example.com    # upgrade; data and password are kept
+sudo ./deploy/install.sh --uninstall                           # remove services, keep data
+```
+
+Other options: `--admin-password PW`, `--rustdesk-version 1.1.16` (pin hbbs/hbbr),
+`--skip-rustdesk` (hbbs/hbbr already installed; set `RUSSDESK_HBBS_KEY_FILE` in
+`/etc/russdesk.env` to its `id_ed25519.pub`), `--no-firewall`.
+
+If the server sits behind a cloud firewall or router, open TCP 21114–21119 and UDP 21116
+there too (21114 is the console and API; the others are RustDesk's usual ports).
+
 ## Quick start (Docker)
 
 ```sh
@@ -82,6 +125,7 @@ RUSSDESK_HBBS_KEY_FILE=/path/to/id_ed25519.pub python3 -m russdesk --data-dir ./
 | `RUSSDESK_HOST` | `0.0.0.0` | Listen address. |
 | `RUSSDESK_DATA_DIR` | `./data` | SQLite database (`russdesk.db`) and recordings. |
 | `RUSSDESK_HBBS_KEY_FILE` | — | hbbs' `id_ed25519.pub`, shown to clients. |
+| `RUSSDESK_ID_SERVER` / `RUSSDESK_RELAY_SERVER` | — | Addresses shown to clients when not set in the console's Settings. |
 | `RUSSDESK_ADMIN_USER` / `RUSSDESK_ADMIN_PASSWORD` | `admin` / random | First admin, created only on an empty database. |
 | `RUSSDESK_TRUST_PROXY` | off | Trust `X-Forwarded-For`/`-Proto` from a reverse proxy. |
 

@@ -50,3 +50,23 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:21114/api/login-options && break; sleep 1; done
           curl -sf -X POST http://127.0.0.1:21114/api/heartbeat -d '{"id":"1","uuid":"u","modified_at":0}'
           docker logs rd
+
+  baremetal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install with the bare-metal script
+        run: sudo ./deploy/install.sh --host 127.0.0.1 --admin-password ci-password-1
+      - name: Check services
+        run: |
+          systemctl is-active russdesk rustdesk-hbbs rustdesk-hbbr
+          sudo ss -ltnup | grep -E ':2111[4-9]'
+          curl -sf -c jar -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-1"}' http://127.0.0.1:21114/api/admin/login
+          curl -sf -b jar http://127.0.0.1:21114/api/admin/client-config | tee cfg.json
+          grep -q "$(sudo cat /var/lib/rustdesk-server/id_ed25519.pub)" cfg.json
+      - name: Upgrade keeps data, uninstall removes services
+        run: |
+          sudo ./deploy/install.sh --host 127.0.0.1
+          curl -sf -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-1"}' http://127.0.0.1:21114/api/admin/login
+          sudo ./deploy/install.sh --uninstall
+          ! systemctl is-active russdesk

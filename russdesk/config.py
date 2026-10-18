@@ -18,6 +18,9 @@ class Config:
     # Path to hbbs' public key (id_ed25519.pub); shown in the console so
     # admins can hand it to clients.
     hbbs_key_file: str = ""
+    # Defaults for the addresses shown to clients; console settings win.
+    id_server: str = ""
+    relay_server: str = ""
     # Trust X-Forwarded-For / X-Forwarded-Proto from a reverse proxy.
     trust_proxy: bool = False
     # Initial admin account, created only when the user table is empty.
@@ -43,6 +46,8 @@ class Config:
         cfg.host = env.get("RUSSDESK_HOST", cfg.host)
         cfg.port = int(env.get("RUSSDESK_PORT", cfg.port))
         cfg.hbbs_key_file = env.get("RUSSDESK_HBBS_KEY_FILE", cfg.hbbs_key_file)
+        cfg.id_server = env.get("RUSSDESK_ID_SERVER", cfg.id_server)
+        cfg.relay_server = env.get("RUSSDESK_RELAY_SERVER", cfg.relay_server)
         cfg.trust_proxy = _bool(env.get("RUSSDESK_TRUST_PROXY"), cfg.trust_proxy)
         cfg.admin_user = env.get("RUSSDESK_ADMIN_USER", cfg.admin_user)
         cfg.admin_password = env.get("RUSSDESK_ADMIN_PASSWORD", cfg.admin_password)

@@ -1123,10 +1123,11 @@ def client_config(app, req):
     host_header = (req.headers.get("Host") or "").strip()
     hostname = host_header.rsplit(":", 1)[0] if not host_header.startswith("[") else \
         host_header.split("]")[0] + "]"
-    host = s["id_server"] or hostname
+    host = s["id_server"] or app.cfg.id_server or hostname
     # Left empty, the client derives http://<ID server>:21114 by itself, which
     # is where this server listens by default.
-    config = {"host": host, "relay": s["relay_server"], "api": s["api_server"], "key": hbbs_key(app)}
+    relay = s["relay_server"] or app.cfg.relay_server
+    config = {"host": host, "relay": relay, "api": s["api_server"], "key": hbbs_key(app)}
     encoded = base64.urlsafe_b64encode(
         json.dumps(config, separators=(",", ":")).encode()).decode()[::-1]
     host_only = host.rsplit(":", 1)[0] if host.count(":") == 1 else host

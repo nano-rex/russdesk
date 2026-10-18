@@ -284,6 +284,16 @@ class ConfigStringTest(ServerTest):
         self.assertEqual(cfg["api_default"], "http://rd.example.com:21114")
 
 
+    def test_env_defaults_for_addresses(self):
+        self.app.cfg.id_server = "203.0.113.5"
+        self.app.cfg.relay_server = "relay.example.com"
+        self.console_login()
+        cfg = self.console("GET", "/api/admin/client-config").json()
+        self.assertEqual((cfg["host"], cfg["relay"]), ("203.0.113.5", "relay.example.com"))
+        self.console("PATCH", "/api/admin/settings", {"id_server": "rd.example.com"})
+        self.assertEqual(self.console("GET", "/api/admin/client-config").json()["host"], "rd.example.com")
+
+
 class TokenLifetimeTest(ServerTest):
     def test_client_login_never_expires_by_default(self):
         token = self.client_login()
