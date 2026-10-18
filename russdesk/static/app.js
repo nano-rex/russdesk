@@ -22,7 +22,7 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
-function append(el, kids) {
+function append(el, ...kids) {
   for (const kid of kids.flat(Infinity)) {
     if (kid === null || kid === undefined || kid === false) continue;
     el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
@@ -226,7 +226,7 @@ function renderShell() {
       : h("a", { class: "nav", href: n.href, "data-match": n.match || n.href, onclick: () => sideEl.classList.remove("open") }, n.label)),
     h("div", { class: "spacer" }),
     h("div", { class: "who" },
-      h("div", {}, h("strong", {}, ME.display_name || ME.name), ME.is_admin ? h("span", { class: "badge accent" }, " admin") : null),
+      h("div", {}, h("strong", {}, ME.display_name || ME.name), " ", ME.is_admin ? h("span", { class: "badge accent" }, "admin") : null),
       h("div", { class: "split" },
         h("a", { href: "#/account", onclick: () => sideEl.classList.remove("open") }, "Account"),
         h("span", {}, "·"),
