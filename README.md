@@ -27,6 +27,33 @@ worked out from the open-source client; see [docs/client-protocol.md](docs/clien
 Not included: OIDC/LDAP login, email verification codes, the web client, the custom client
 generator, and the Pro relay/ID server features (those live in Pro's `hbbs`, not in the console).
 
+## Works with the official RustDesk apps
+
+No custom build is needed: the stock apps from rustdesk.com, the app stores and GitHub talk to
+the official open-source `hbbs`/`hbbr` for connections, and to RussDesk for everything else.
+Checked against the client source (rustdesk/rustdesk `master`, October 2026):
+
+| | Windows | macOS | Linux | Android | iOS |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| Remote control through your server (hbbs/hbbr) | ✓ | ✓ | ✓ | ✓ | ✓ controller only |
+| Log in with a RussDesk account, address books, *Accessible devices* tab | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Listed under Devices (heartbeat, system info), online status | ✓ | ✓ | ✓ | ✓ | — |
+| Connection, file-transfer and alarm logs for sessions *into* the device | ✓ | ✓ | ✓ | ✓ | — |
+| Strategies (pushed settings) and remote **Disconnect** | ✓ | ✓ | ✓ | ✓ | — |
+| Import settings by config string / QR code | ✓ | ✓ | ✓ | ✓ (QR) | ✓ |
+
+iOS can't be controlled remotely (an Apple restriction that applies to RustDesk Pro too), so the
+iOS client never reports itself as a device; it can log in, use address books and connect out,
+and its outgoing sessions appear in the target device's connection log.
+
+Plain `http://<server>:21114` works on phones too: the apps send API requests through their own
+Rust HTTP stack, so Android's cleartext rule and iOS App Transport Security don't apply.
+
+When RussDesk answers the client's system-info upload the client treats the server as "Pro".
+That changes only two small things in the client: an admin can let a device hide its
+connection window (option `allow-hide-cm`, permanent-password-only mode), and a Windows
+connection-manager error popup is suppressed.
+
 ## Install on a bare-metal Linux server
 
 Needs a systemd distribution (Debian/Ubuntu, RHEL/Rocky/Alma, Fedora, Arch…) with Python 3.10+.
