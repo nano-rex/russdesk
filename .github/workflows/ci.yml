@@ -66,18 +66,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install with the bare-metal script
-        run: sudo ./deploy/install.sh --host 127.0.0.1 --admin-password ci-password-1
+      - name: Install the way the README says (script piped into sh, code fetched from GitHub)
+        run: cat russdesk.sh | sudo sh -s -- install --yes --ref "$GITHUB_SHA" --host "$(hostname -I | awk '{print $1}')" --admin-password ci-password-1
       - name: Check services
         run: |
+          sudo sh russdesk.sh status
           systemctl is-active russdesk russdesk-hbbs russdesk-hbbr
           sudo ss -ltnup | grep -E ':3111[4-9]'
-          curl -sf -c jar -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-1"}' http://127.0.0.1:31114/api/admin/login
-          curl -sf -b jar http://127.0.0.1:31114/api/admin/client-config | tee cfg.json
-          grep -q "$(sudo cat /var/lib/russdesk-hbbs/id_ed25519.pub)" cfg.json
-      - name: Upgrade keeps data, uninstall removes services
+      - name: End-to-end test with the terminal client
+        run: RDCLIENT_PASSWORD=ci-password-1 python3 tools/rdclient.py selftest --server "$(hostname -I | awk '{print $1}'):31116"
+      - name: Upgrade keeps data, reset-password, uninstall, purge
         run: |
-          sudo ./deploy/install.sh --host 127.0.0.1
+          sudo sh russdesk.sh install --yes
           curl -sf -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-1"}' http://127.0.0.1:31114/api/admin/login
-          sudo ./deploy/install.sh --uninstall
+          sudo sh russdesk.sh reset-password admin --admin-password ci-password-2
+          curl -sf -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-2"}' http://127.0.0.1:31114/api/admin/login
+          sudo sh russdesk.sh uninstall --yes
           ! systemctl is-active russdesk
+          test -f /etc/russdesk.env
+          sudo sh russdesk.sh uninstall --purge --yes
+          test ! -e /etc/russdesk.env && test ! -e /var/lib/russdesk && ! id russdesk

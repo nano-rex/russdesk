@@ -83,29 +83,42 @@ existing RustDesk server on the same machine:
 Clients must therefore include the port in the ID server field (`host:31116`); without it
 they assume RustDesk's default 21116.
 
-## Install on a bare-metal Linux server
+## Install on a Linux server (one script)
 
-Needs a systemd distribution (Debian/Ubuntu, RHEL/Rocky/Alma, Fedora, Arch…) with Python 3.10+.
-Nothing else is installed: no Docker, pip packages or database server.
+Needs a systemd distribution (Debian/Ubuntu, RHEL/Rocky/Alma, Fedora, Arch, openSUSE…). No
+Docker, no clone, nothing else to set up:
 
 ```sh
-git clone https://github.com/nano-rex/russdesk.git
-cd russdesk
-sudo ./deploy/install.sh --host rd.example.com      # your public DNS name or IP
+curl -fsSL https://raw.githubusercontent.com/nano-rex/russdesk/main/russdesk.sh | sudo sh
 ```
 
-The script:
+It detects the server's public address (or asks), installs and starts everything, opens the
+ports in ufw or firewalld, and prints the console address, the first admin password and the key
+for clients. The same script manages it afterwards:
 
-* downloads the official open-source `hbbs`/`hbbr` release for your CPU (x86-64, ARM64,
-  ARMv7, i386) into `/usr/local/lib/russdesk/bin`
-* installs RussDesk to `/opt/russdesk`
-* creates a `russdesk` system user and three systemd services: `russdesk-hbbs`,
-  `russdesk-hbbr`, `russdesk` (sandboxed, restart on failure, start at boot)
+| Command | |
+| --- | --- |
+| `sudo sh russdesk.sh` | Install, or **upgrade** an existing install (data, key and settings are kept) |
+| `sudo sh russdesk.sh status` | Services, client settings, key |
+| `sudo sh russdesk.sh reset-password [USER]` | New console password (also turns off that user's 2FA) |
+| `sudo sh russdesk.sh uninstall` | Remove RussDesk, keep its data and key for a later reinstall |
+| `sudo sh russdesk.sh uninstall --purge` | Remove everything RussDesk created, including data and key |
+
+Get the script with `curl -fsSLO https://raw.githubusercontent.com/nano-rex/russdesk/main/russdesk.sh`
+to run the other commands. Install options: `--host ADDR` (skip detection), `--lan CIDR|off`,
+`--admin-password PW`, `--rustdesk-version V`, `--ref BRANCH_OR_TAG`, `--no-firewall`, `--yes`.
+
+What it installs:
+
+* the official open-source `hbbs`/`hbbr` release for your CPU (x86-64, ARM64, ARMv7, i386)
+  in `/usr/local/lib/russdesk/bin`, and RussDesk in `/opt/russdesk`
+* a `russdesk` system user and three sandboxed systemd services, started at boot:
+  `russdesk` (31114), `russdesk-hbbs` (31115/31116/31118), `russdesk-hbbr` (31117/31119)
+* a Python 3.10+ from the distribution's packages if none is present
 
 All names, paths and ports are RussDesk's own, so it can run on the same machine as RustDesk
-Server Pro or the official `rustdesk-server` packages without touching them.
-* writes `/etc/russdesk.env` and opens the ports in ufw or firewalld if one is active
-* prints the console address, the first admin password and the key for clients
+Server Pro or the official `rustdesk-server` packages without touching them; uninstalling never
+touches them either.
 
 | Path | |
 | --- | --- |
@@ -113,21 +126,29 @@ Server Pro or the official `rustdesk-server` packages without touching them.
 | `/var/lib/russdesk/russdesk.db` | Console database (users, devices, logs, address books). |
 | `/etc/russdesk.env` | RussDesk settings (see the table under *Without Docker*). |
 
-Day-to-day:
+**Servers behind a router (LAN mode).** When the machine has a private address and clients reach
+it through a public one, the script sets up hbbs so devices on the same LAN get the relay's LAN
+address (many routers don't loop public traffic back into the LAN). Devices on that LAN should
+use the LAN address as ID server (`status` shows both). Forward TCP 31114–31119 and UDP 31116 on
+the router to the server.
+
+If a cloud firewall sits in front of the server, open TCP 31114–31119 and UDP 31116 there too.
+
+## Testing a server from a terminal
+
+`tools/rdclient.py` (Python 3.6+, no dependencies) speaks the RustDesk protocols without the
+screen sharing: ID registration with hbbs, relayed sessions through hbbr, and the API.
 
 ```sh
-systemctl status russdesk russdesk-hbbs russdesk-hbbr
-journalctl -u russdesk -u russdesk-hbbs -u russdesk-hbbr -f
-git pull && sudo ./deploy/install.sh --host rd.example.com    # upgrade; data and password are kept
-sudo ./deploy/install.sh --uninstall                           # remove services, keep data
+python3 tools/rdclient.py selftest --server rd.example.com:31116          # 18 end-to-end checks
+python3 tools/rdclient.py device  --server rd.example.com:31116 --key KEY  # a fake device
+python3 tools/rdclient.py connect 123456789 --server rd.example.com:31116 --key KEY --hold 60
 ```
 
-Other options: `--admin-password PW`, `--rustdesk-version 1.1.16` (pin hbbs/hbbr),
-`--skip-rustdesk` (hbbs/hbbr already installed; set `RUSSDESK_HBBS_KEY_FILE` in
-`/etc/russdesk.env` to its `id_ed25519.pub`), `--no-firewall`.
-
-If the server sits behind a cloud firewall or router, open TCP 31114–31119 and UDP 31116
-there too.
+`selftest` registers a test device, logs in, connects to it through the relay, and checks through
+the console: the device list, live sessions, Disconnect, the connection log and note, strategy
+push and reset, disable/enable, accessible devices and the address book. It removes its test
+device afterwards.
 
 ## Quick start (Docker)
 
@@ -228,6 +249,7 @@ are sent empty, which returns them to the client's default.
 python3 -m unittest discover -s tests            # API tests (no dependencies)
 python3 tests/ui_test.py                         # browser test, needs Playwright + Chromium
 python3 tests/pro_scripts_test.py                # Pro's management scripts, needs requests
+python3 tools/rdclient.py selftest --server …    # a running server, end to end
 ```
 
 Databases from v0.1 are upgraded automatically on start (tested against a v0.1 fixture).
