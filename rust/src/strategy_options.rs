@@ -2,18 +2,37 @@
 //! from the RustDesk client's KEYS_SETTINGS; the client applies whatever a
 //! strategy sends, so the console also accepts custom keys.
 
-use serde::Serialize;
+use crate::json::{Object, Value};
 
-#[derive(Clone, Serialize)]
+#[derive(Clone)]
 pub struct StrategyOption {
     pub key: &'static str,
     pub section: &'static str,
     pub label: &'static str,
-    #[serde(rename = "type")]
     pub kind: &'static str,
     pub default: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<[&'static str; 2]>>,
+}
+
+impl StrategyOption {
+    pub fn to_value(&self) -> Value {
+        let mut o = Object::new();
+        o.insert("key".into(), self.key.into());
+        o.insert("section".into(), self.section.into());
+        o.insert("label".into(), self.label.into());
+        o.insert("type".into(), self.kind.into());
+        o.insert("default".into(), self.default.into());
+        if let Some(ch) = &self.choices {
+            let arr: Vec<Value> = ch.iter().map(|c| Value::from(vec![c[0], c[1]])).collect();
+            o.insert("choices".into(), Value::Array(arr));
+        }
+        Value::Object(o)
+    }
+}
+
+/// The full catalogue as a JSON array (for the console API).
+pub fn catalogue_value() -> Value {
+    Value::Array(strategy_options().iter().map(|o| o.to_value()).collect())
 }
 
 const fn opt(

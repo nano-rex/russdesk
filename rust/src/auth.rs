@@ -5,8 +5,6 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use serde_json::json;
-
 use crate::db::{int, now, text, Database, Row};
 use crate::mail;
 use crate::models::rstr;
@@ -61,11 +59,7 @@ fn wall_secs() -> f64 {
 }
 
 fn rand_secret(n: usize) -> String {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    let mut buf = vec![0u8; n];
-    getrandom::getrandom(&mut buf).expect("getrandom");
-    URL_SAFE_NO_PAD.encode(buf)
+    crate::encoding::base64url_encode_nopad(&crate::rand::bytes(n))
 }
 
 /// Return the user row for valid credentials, else a LoginError.
@@ -238,8 +232,8 @@ pub fn finish_challenge(db: &Database, secret: &str, code: &str) -> Result<Row, 
         return Err(LoginError::new("User is disabled"));
     }
     let ok = if method == "email" {
-        use subtle::ConstantTimeEq;
-        !code.is_empty() && token_hash(code.trim()).as_bytes().ct_eq(code_hash.as_bytes()).into()
+        !code.is_empty()
+            && crate::crypto::ct_eq(token_hash(code.trim()).as_bytes(), code_hash.as_bytes())
     } else {
         verify_code(db, &user, code)
     };
@@ -256,8 +250,7 @@ pub fn verify_code(db: &Database, user: &Row, code: &str) -> bool {
     if verify_totp(&rstr(user, "totp_secret"), code) {
         return true;
     }
-    let mut hashes: Vec<String> =
-        serde_json::from_str(&rstr(user, "totp_backup")).unwrap_or_default();
+    let mut hashes: Vec<String> = string_array(&rstr(user, "totp_backup"));
     let Some(i) = crate::security::match_backup_code(&hashes, code) else {
         return false;
     };
@@ -265,11 +258,21 @@ pub fn verify_code(db: &Database, user: &Row, code: &str) -> bool {
     let _ = db.execute(
         "UPDATE users SET totp_backup = ?1 WHERE id = ?2",
         &[
-            text(serde_json::to_string(&hashes).unwrap_or_else(|_| "[]".into())),
+            text(crate::json::to_string(&crate::json::Value::from(hashes))),
             int(rint_id(user)),
         ],
     );
     true
+}
+
+/// Parse a JSON array of strings (the stored backup-code hashes).
+fn string_array(s: &str) -> Vec<String> {
+    match crate::json::from_str(s) {
+        Ok(crate::json::Value::Array(a)) => {
+            a.iter().filter_map(|v| v.as_str().map(|x| x.to_string())).collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 pub fn expire_pending() {
@@ -364,7 +367,7 @@ mod tests {
         let uid = add_user(&db, "carol", "secret123", 1);
         db.execute(
             "UPDATE users SET totp_secret = 'JBSWY3DPEHPK3PXP', totp_backup = ?1 WHERE id = ?2",
-            &[text(serde_json::to_string(&hashes).unwrap()), int(uid)],
+            &[text(crate::json::to_string(&crate::json::Value::from(hashes.clone()))), int(uid)],
         )
         .unwrap();
         let user = db
@@ -377,7 +380,7 @@ mod tests {
             .query_one("SELECT * FROM users WHERE id = ?1", &[int(uid)])
             .unwrap()
             .unwrap();
-        let left: Vec<String> = serde_json::from_str(&rstr(&user, "totp_backup")).unwrap();
+        let left: Vec<String> = string_array(&rstr(&user, "totp_backup"));
         assert_eq!(left.len(), 2);
         assert!(!verify_code(&db, &user, &codes[0])); // already used
         let _ = std::fs::remove_dir_all(&dir);

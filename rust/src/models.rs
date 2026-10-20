@@ -7,8 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use crate::json::Value;
 
 use crate::db::{int, now, opt_int, text, Database, Row};
 
@@ -130,13 +129,13 @@ pub fn loads_or(s: &str, default: Value) -> Value {
     if s.is_empty() {
         return default;
     }
-    serde_json::from_str(s).unwrap_or(default)
+    crate::json::from_str(s).unwrap_or(default)
 }
 
 /// A random RFC 4122 v4 GUID string.
 pub fn new_guid() -> String {
     let mut b = [0u8; 16];
-    getrandom::getrandom(&mut b).expect("getrandom");
+    crate::rand::fill(&mut b);
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     format!(
@@ -275,7 +274,7 @@ pub fn accessible_scope(db: &Database, user: &Row) -> Option<(BTreeSet<i64>, BTr
 pub fn accessible_sql(
     scope: &Option<(BTreeSet<i64>, BTreeSet<i64>)>,
     alias: &str,
-) -> (String, Vec<rusqlite::types::Value>) {
+) -> (String, Vec<crate::db::SqlValue>) {
     let blocked = format!(
         "{alias}.disabled = 0 AND NOT EXISTS (SELECT 1 FROM users bu \
          WHERE bu.id = {alias}.user_id AND bu.status = 0)"
@@ -380,7 +379,7 @@ pub fn desired_config(db: &Database, device: &Row) -> (BTreeMap<String, String>,
         if let Value::Object(map) = loads_or(&rstr(s, "options"), json!({})) {
             for (k, v) in map {
                 let val = match v {
-                    Value::String(s) => s,
+                    Value::Str(s) => s,
                     other => other.to_string(),
                 };
                 options.insert(k, val);
@@ -403,7 +402,7 @@ pub fn desired_config(db: &Database, device: &Row) -> (BTreeMap<String, String>,
 }
 
 fn hex12(input: &str) -> i64 {
-    let d = Sha256::digest(input.as_bytes());
+    let d = crate::crypto::sha256(input.as_bytes());
     let hex: String = d.iter().take(6).map(|b| format!("{:02x}", b)).collect();
     i64::from_str_radix(&hex, 16).unwrap_or(0)
 }
@@ -486,7 +485,7 @@ pub fn device_payload(db: &Database, row: &Row, full: bool) -> Value {
     let mut data = json!({
         "guid": rstr(row, "guid"),
         "id": rstr(row, "id"),
-        "hostname": hostname,
+        "hostname": hostname.clone(),
         "device_name": hostname,
         "username": username,
         "os": rstr(row, "os"),
@@ -582,7 +581,7 @@ pub fn book_rule(db: &Database, user: &Row, guid: &str, as_admin: bool) -> i64 {
     }
     let uid = rint(user, "id");
     let gid = ropt_int(user, "group_id").unwrap_or(-1);
-    let checks: [(&str, Vec<rusqlite::types::Value>); 3] = [
+    let checks: [(&str, Vec<crate::db::SqlValue>); 3] = [
         ("user_id = ?2", vec![text(guid), int(uid)]),
         ("user_group_id = ?2", vec![text(guid), int(gid)]),
         ("everyone = 1", vec![text(guid)]),
@@ -701,7 +700,7 @@ pub fn peer_payload(db: &Database, row: &Row, personal: bool) -> Value {
 pub fn upsert_peer(
     db: &Database,
     guid: &str,
-    peer: &serde_json::Map<String, Value>,
+    peer: &crate::json::Object,
     personal: bool,
     update_only: bool,
 ) -> Option<String> {
@@ -759,7 +758,7 @@ pub fn upsert_peer(
         if let Some(v) = peer.get(*key) {
             if !v.is_null() {
                 let s = match v {
-                    Value::String(s) => s.clone(),
+                    Value::Str(s) => s.clone(),
                     other => other.to_string(),
                 };
                 values.insert((*key).to_string(), s.chars().take(1024).collect());
@@ -780,14 +779,14 @@ pub fn upsert_peer(
             .map(|r| rstr(r, "name"))
             .collect();
         let kept: Vec<String> = wanted.into_iter().filter(|t| known.contains(t)).collect();
-        tags = serde_json::to_string(&kept).unwrap_or_else(|_| "[]".to_string());
+        tags = crate::json::to_string(&Value::from(kept));
     }
     let mut extra_val = loads_or(&extra, json!({}));
     if let Value::Object(map) = &mut extra_val {
         for key in PEER_EXTRA_FIELDS {
             if let Some(v) = peer.get(*key) {
                 let s = match v {
-                    Value::String(s) => s.clone(),
+                    Value::Str(s) => s.clone(),
                     other => other.to_string(),
                 };
                 map.insert((*key).to_string(), json!(s.chars().take(256).collect::<String>()));
@@ -851,7 +850,7 @@ pub fn rename_tag(db: &Database, guid: &str, old: &str, new: &str) {
                 let _ = db.execute(
                     "UPDATE ab_peers SET tags = ?1 WHERE guid = ?2 AND peer_id = ?3",
                     &[
-                        text(serde_json::to_string(&cleaned).unwrap_or_default()),
+                        text(crate::json::to_string(&Value::from(cleaned))),
                         text(guid),
                         text(rstr(r, "peer_id")),
                     ],
@@ -883,7 +882,7 @@ pub fn delete_tags(db: &Database, guid: &str, names: &[String]) {
                 let _ = db.execute(
                     "UPDATE ab_peers SET tags = ?1 WHERE guid = ?2 AND peer_id = ?3",
                     &[
-                        text(serde_json::to_string(&kept).unwrap_or_default()),
+                        text(crate::json::to_string(&Value::from(kept))),
                         text(guid),
                         text(rstr(r, "peer_id")),
                     ],
@@ -1061,10 +1060,8 @@ mod tests {
         // A new id but the same uuid follows the device (id change).
         let d3 = ensure_device(&db, "999000222", "uuid-a", "1.2.3.4").unwrap();
         assert_eq!(rstr(&d3, "guid"), rstr(&d1, "guid"));
-        let count: i64 = db
-            .with_conn(|c| c.query_row("SELECT count(*) FROM devices", [], |r| r.get(0)))
-            .unwrap();
-        assert_eq!(count, 1);
+        let rows = db.query("SELECT count(*) AS c FROM devices", &[]).unwrap();
+        assert_eq!(rows[0].get("c").unwrap().as_i64(), Some(1));
 
         let uid = db
             .insert(

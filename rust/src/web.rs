@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
+use crate::json::{Object, Value};
+
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
 
 pub type Params = HashMap<String, String>;
@@ -45,17 +47,19 @@ impl Request {
 
     /// Parse the body as JSON whatever the Content-Type (the client posts JSON
     /// as text/plain).
-    pub fn json(&self) -> HttpResult<serde_json::Value> {
+    pub fn json(&self) -> HttpResult<Value> {
         if self.body.is_empty() {
-            return Ok(serde_json::Value::Null);
+            return Ok(Value::Null);
         }
-        serde_json::from_slice(&self.body).map_err(|_| HttpError::new(400, "Invalid JSON body"))
+        let text =
+            std::str::from_utf8(&self.body).map_err(|_| HttpError::new(400, "Invalid JSON body"))?;
+        crate::json::from_str(text).map_err(|_| HttpError::new(400, "Invalid JSON body"))
     }
 
-    pub fn json_object(&self) -> HttpResult<serde_json::Map<String, serde_json::Value>> {
+    pub fn json_object(&self) -> HttpResult<Object> {
         match self.json()? {
-            serde_json::Value::Object(m) => Ok(m),
-            serde_json::Value::Null => Ok(serde_json::Map::new()),
+            Value::Object(m) => Ok(m),
+            Value::Null => Ok(Object::new()),
             _ => Err(HttpError::new(400, "Expected a JSON object")),
         }
     }
@@ -106,16 +110,12 @@ impl Response {
     }
 }
 
-pub fn json_response(value: &serde_json::Value, status: u16) -> Response {
-    Response::new(
-        serde_json::to_vec(value).unwrap_or_default(),
-        status,
-        "application/json",
-    )
+pub fn json_response(value: &Value, status: u16) -> Response {
+    Response::new(crate::json::to_string(value).into_bytes(), status, "application/json")
 }
 
 pub fn error_response(status: u16, message: &str) -> Response {
-    json_response(&serde_json::json!({ "error": message }), status)
+    json_response(&json!({ "error": message }), status)
 }
 
 impl From<HttpError> for Response {
@@ -126,8 +126,10 @@ impl From<HttpError> for Response {
 
 // -- router -------------------------------------------------------------------
 
+pub type Handler<A> = dyn Fn(&A, &Request, &Params) -> HttpResult<Response> + Send + Sync;
+
 pub enum Match<'a, A> {
-    Found(&'a dyn Fn(&A, &Request, &Params) -> Response, Params),
+    Found(&'a Handler<A>, Params),
     MethodNotAllowed,
     NotFound,
 }
@@ -135,7 +137,7 @@ pub enum Match<'a, A> {
 struct Route<A> {
     method: String,
     segments: Vec<Seg>,
-    handler: Box<dyn Fn(&A, &Request, &Params) -> Response + Send + Sync>,
+    handler: Box<Handler<A>>,
 }
 
 enum Seg {
@@ -176,7 +178,7 @@ impl<A> Router<A> {
         &mut self,
         method: &str,
         pattern: &str,
-        handler: impl Fn(&A, &Request, &Params) -> Response + Send + Sync + 'static,
+        handler: impl Fn(&A, &Request, &Params) -> HttpResult<Response> + Send + Sync + 'static,
     ) {
         self.routes.push(Route {
             method: method.to_string(),
@@ -478,7 +480,7 @@ mod tests {
     fn router_matches_and_captures() {
         let mut r: Router<DummyApp> = Router::new();
         r.add("GET", "/api/users/<id>", |_a, _req, p| {
-            json_response(&serde_json::json!({ "id": p.get("id") }), 200)
+            Ok(json_response(&json!({ "id": p.get("id") }), 200))
         });
         match r.match_route("GET", "/api/users/42") {
             Match::Found(_, params) => assert_eq!(params.get("id").unwrap(), "42"),

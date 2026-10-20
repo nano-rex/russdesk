@@ -1,54 +1,37 @@
-//! SQLite access: schema, settings and small query helpers. Port of db.py.
-//!
-//! The Rust rewrite uses a fresh database, so rather than replay db.py's v1->v2
-//! migration path this emits the consolidated final schema directly.
+//! SQLite access: schema, settings and small query helpers. Built on our own
+//! sqlite FFI wrapper and json module (no third-party crates).
 
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::types::{Value, ValueRef};
-use rusqlite::Connection;
-use serde::Serialize;
+use crate::json::{self, Value};
+use crate::rand;
+use crate::sqlite::Connection;
+pub use crate::sqlite::SqlValue;
 
-/// A database row as a JSON object, mirroring Python's sqlite3.Row/dict usage.
-pub type Row = serde_json::Map<String, serde_json::Value>;
-
-/// Build a parameter list for the query helpers.
-pub fn params(items: Vec<Value>) -> Vec<Value> {
-    items
-}
-
-fn row_to_json(row: &rusqlite::Row, names: &[String]) -> Row {
-    let mut map = serde_json::Map::new();
-    for (i, name) in names.iter().enumerate() {
-        let val = match row.get_ref(i).unwrap_or(ValueRef::Null) {
-            ValueRef::Null => serde_json::Value::Null,
-            ValueRef::Integer(n) => serde_json::Value::from(n),
-            ValueRef::Real(f) => serde_json::Value::from(f),
-            ValueRef::Text(t) => serde_json::Value::from(String::from_utf8_lossy(t).into_owned()),
-            ValueRef::Blob(b) => serde_json::Value::from(String::from_utf8_lossy(b).into_owned()),
-        };
-        map.insert(name.clone(), val);
-    }
-    map
-}
+/// A database row as a JSON object, mirroring Python's dict-style rows.
+pub type Row = json::Object;
 
 /// Seconds since the epoch, as stored in every timestamp column.
 pub fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+// Parameter constructors.
+pub fn int(n: i64) -> SqlValue {
+    SqlValue::Int(n)
+}
+pub fn text(s: impl Into<String>) -> SqlValue {
+    SqlValue::Text(s.into())
+}
+pub fn opt_int(n: Option<i64>) -> SqlValue {
+    n.map(SqlValue::Int).unwrap_or(SqlValue::Null)
 }
 
 const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY, value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY, value TEXT NOT NULL
-);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS user_groups (
     id INTEGER PRIMARY KEY,
@@ -258,9 +241,7 @@ CREATE TABLE IF NOT EXISTS console_logs (
 );
 CREATE INDEX IF NOT EXISTS console_logs_created ON console_logs(created_at);
 
-CREATE TABLE IF NOT EXISTS nonces (
-    nonce TEXT PRIMARY KEY, created_at INTEGER NOT NULL
-);
+CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS recordings (
     id INTEGER PRIMARY KEY,
@@ -313,7 +294,7 @@ CREATE TABLE IF NOT EXISTS user_admin_roles (
 "#;
 
 /// Console-editable settings and their defaults (db.py DEFAULT_SETTINGS).
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub id_server: String,
     pub relay_server: String,
@@ -366,7 +347,6 @@ impl Default for Settings {
     }
 }
 
-/// The set of valid setting keys (db.py DEFAULT_SETTINGS keys).
 pub const SETTING_KEYS: &[&str] = &[
     "id_server", "relay_server", "api_server", "server_key", "client_token_days",
     "console_session_hours", "log_retention_days", "accept_recordings", "recordings_max_mb",
@@ -376,10 +356,10 @@ pub const SETTING_KEYS: &[&str] = &[
 ];
 
 impl Settings {
-    fn apply(&mut self, key: &str, v: &serde_json::Value) {
-        let s = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
-        let i = |v: &serde_json::Value| v.as_i64().unwrap_or(0);
-        let b = |v: &serde_json::Value| v.as_bool().unwrap_or(false);
+    fn apply(&mut self, key: &str, v: &Value) {
+        let s = |v: &Value| v.as_str().unwrap_or("").to_string();
+        let i = |v: &Value| v.as_i64().unwrap_or(0);
+        let b = |v: &Value| v.as_bool().unwrap_or(false);
         match key {
             "id_server" => self.id_server = s(v),
             "relay_server" => self.relay_server = s(v),
@@ -405,6 +385,33 @@ impl Settings {
             _ => {}
         }
     }
+
+    /// The settings as a JSON object (for the console API).
+    pub fn to_value(&self) -> Value {
+        json!({
+            "id_server": self.id_server.clone(),
+            "relay_server": self.relay_server.clone(),
+            "api_server": self.api_server.clone(),
+            "server_key": self.server_key.clone(),
+            "client_token_days": self.client_token_days,
+            "console_session_hours": self.console_session_hours,
+            "log_retention_days": self.log_retention_days,
+            "accept_recordings": self.accept_recordings,
+            "recordings_max_mb": self.recordings_max_mb,
+            "max_peers_per_ab": self.max_peers_per_ab,
+            "default_strategy_id": self.default_strategy_id,
+            "only_admin_logs": self.only_admin_logs,
+            "allow_non_admin_share": self.allow_non_admin_share,
+            "disable_accessible_devices": self.disable_accessible_devices,
+            "console_url": self.console_url.clone(),
+            "smtp_host": self.smtp_host.clone(),
+            "smtp_port": self.smtp_port,
+            "smtp_security": self.smtp_security.clone(),
+            "smtp_user": self.smtp_user.clone(),
+            "smtp_password": self.smtp_password.clone(),
+            "smtp_from": self.smtp_from.clone(),
+        })
+    }
 }
 
 pub struct Database {
@@ -412,16 +419,14 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn open(path: &Path) -> rusqlite::Result<Self> {
+    pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let conn = Connection::open(path)?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=30000;",
+        conn.exec(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; \
+             PRAGMA foreign_keys=ON; PRAGMA busy_timeout=30000;",
         )?;
         let db = Database {
             conn: Mutex::new(conn),
@@ -430,124 +435,82 @@ impl Database {
         Ok(db)
     }
 
-    fn migrate(&self) -> rusqlite::Result<()> {
+    fn migrate(&self) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch(SCHEMA)?;
-        let has_meta: bool = conn
-            .query_row("SELECT 1 FROM meta WHERE key = 'schema_version'", [], |_| Ok(true))
-            .unwrap_or(false);
-        if !has_meta {
+        conn.exec(SCHEMA)?;
+        let has = conn
+            .query("SELECT value FROM meta WHERE key = 'schema_version'", &[])?
+            .into_iter()
+            .next()
+            .is_some();
+        if !has {
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES ('schema_version', '2'), ('instance_id', ?1)",
-                [uuid_hex()],
+                &[text(uuid_hex())],
             )?;
         }
         Ok(())
     }
 
     pub fn meta(&self, key: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+        self.query_one("SELECT value FROM meta WHERE key = ?1", &[text(key)])
             .ok()
+            .flatten()
+            .and_then(|r| r.get("value").and_then(|v| v.as_str()).map(|s| s.to_string()))
     }
 
     pub fn settings(&self) -> Settings {
         let mut s = Settings::default();
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare("SELECT key, value FROM settings") {
-            Ok(st) => st,
-            Err(_) => return s,
-        };
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-            .map(|it| it.filter_map(|x| x.ok()).collect::<Vec<_>>())
-            .unwrap_or_default();
-        for (key, raw) in rows {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+        let rows = self.query("SELECT key, value FROM settings", &[]).unwrap_or_default();
+        for row in &rows {
+            let key = row.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let raw = row.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            if let Ok(v) = json::from_str(raw) {
                 s.apply(&key, &v);
             }
         }
         s
     }
 
-    /// Store settings; each value is JSON-encoded like db.py. Unknown keys error.
-    pub fn set_settings(&self, values: &[(&str, serde_json::Value)]) -> rusqlite::Result<()> {
+    /// Store settings; each value is JSON-encoded. Unknown keys error.
+    pub fn set_settings(&self, values: &[(&str, Value)]) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        conn.exec("BEGIN IMMEDIATE")?;
         for (key, value) in values {
             if !SETTING_KEYS.contains(key) {
-                return Err(rusqlite::Error::InvalidParameterName((*key).to_string()));
+                let _ = conn.exec("ROLLBACK");
+                return Err(format!("unknown setting: {key}"));
             }
-            tx.execute(
-                "INSERT INTO settings(key, value) VALUES (?1, ?2)
+            conn.execute(
+                "INSERT INTO settings(key, value) VALUES (?1, ?2) \
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                rusqlite::params![key, value.to_string()],
+                &[text(*key), text(json::to_string(value))],
             )?;
         }
-        tx.commit()
+        conn.exec("COMMIT")
     }
 
-    /// Run a closure with the locked connection. The porting layer uses this
-    /// for queries not yet wrapped in a typed helper.
-    pub fn with_conn<T>(
-        &self,
-        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
-    ) -> rusqlite::Result<T> {
-        let conn = self.conn.lock().unwrap();
-        f(&conn)
+    pub fn query(&self, sql: &str, args: &[SqlValue]) -> Result<Vec<Row>, String> {
+        self.conn.lock().unwrap().query(sql, args)
     }
 
-    /// All matching rows as JSON objects (db.py `all`).
-    pub fn query(&self, sql: &str, args: &[Value]) -> rusqlite::Result<Vec<Row>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(sql)?;
-        let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(args.iter()), |row| {
-                Ok(row_to_json(row, &names))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    }
-
-    /// The first matching row as a JSON object, if any (db.py `one`).
-    pub fn query_one(&self, sql: &str, args: &[Value]) -> rusqlite::Result<Option<Row>> {
+    pub fn query_one(&self, sql: &str, args: &[SqlValue]) -> Result<Option<Row>, String> {
         Ok(self.query(sql, args)?.into_iter().next())
     }
 
-    /// Execute a statement, returning the number of affected rows (db.py `run`).
-    pub fn execute(&self, sql: &str, args: &[Value]) -> rusqlite::Result<usize> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(sql, rusqlite::params_from_iter(args.iter()))
+    pub fn execute(&self, sql: &str, args: &[SqlValue]) -> Result<usize, String> {
+        self.conn.lock().unwrap().execute(sql, args)
     }
 
-    /// The id of the last inserted row after an INSERT via `execute`.
-    pub fn insert(&self, sql: &str, args: &[Value]) -> rusqlite::Result<i64> {
+    pub fn insert(&self, sql: &str, args: &[SqlValue]) -> Result<i64, String> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(sql, rusqlite::params_from_iter(args.iter()))?;
+        conn.execute(sql, args)?;
         Ok(conn.last_insert_rowid())
     }
 }
 
-/// Convenience constructors for SQL parameter values.
-pub fn int(n: i64) -> Value {
-    Value::Integer(n)
-}
-pub fn text(s: impl Into<String>) -> Value {
-    Value::Text(s.into())
-}
-pub fn opt_int(n: Option<i64>) -> Value {
-    n.map(Value::Integer).unwrap_or(Value::Null)
-}
-
 pub fn uuid_hex() -> String {
-    let b = {
-        let mut buf = [0u8; 16];
-        getrandom::getrandom(&mut buf).expect("getrandom");
-        buf
-    };
-    b.iter().map(|x| format!("{:02x}", x)).collect()
+    crate::encoding::hex(&rand::bytes(16))
 }
 
 #[cfg(test)]
@@ -562,18 +525,14 @@ mod tests {
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        let path = dir.join("t.db");
-        let db = Database::open(&path).unwrap();
+        let db = Database::open(&dir.join("t.db")).unwrap();
         (dir, db)
     }
 
     #[test]
     fn schema_and_defaults() {
         let (dir, db) = tmp_db();
-        let s = db.settings();
-        assert_eq!(s, Settings::default());
-        assert_eq!(s.console_session_hours, 12);
-        assert_eq!(s.smtp_security, "starttls");
+        assert_eq!(db.settings(), Settings::default());
         assert_eq!(db.meta("schema_version").as_deref(), Some("2"));
         assert!(db.meta("instance_id").is_some());
         let _ = std::fs::remove_dir_all(&dir);
@@ -583,10 +542,10 @@ mod tests {
     fn settings_typed_round_trip() {
         let (dir, db) = tmp_db();
         db.set_settings(&[
-            ("id_server", serde_json::json!("rd.example.com:21116")),
-            ("console_session_hours", serde_json::json!(24)),
-            ("accept_recordings", serde_json::json!(true)),
-            ("default_strategy_id", serde_json::json!(5)),
+            ("id_server", json!("rd.example.com:21116")),
+            ("console_session_hours", json!(24)),
+            ("accept_recordings", json!(true)),
+            ("default_strategy_id", json!(5)),
         ])
         .unwrap();
         let s = db.settings();
@@ -594,23 +553,17 @@ mod tests {
         assert_eq!(s.console_session_hours, 24);
         assert!(s.accept_recordings);
         assert_eq!(s.default_strategy_id, Some(5));
-        assert!(db.set_settings(&[("bogus", serde_json::json!(1))]).is_err());
+        assert!(db.set_settings(&[("bogus", json!(1))]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn core_tables_exist() {
         let (dir, db) = tmp_db();
-        let count: i64 = db
-            .with_conn(|c| {
-                c.query_row(
-                    "SELECT count(*) FROM sqlite_master WHERE type='table'",
-                    [],
-                    |r| r.get(0),
-                )
-            })
+        let n = db
+            .query("SELECT count(*) AS c FROM sqlite_master WHERE type='table'", &[])
             .unwrap();
-        assert!(count >= 20, "expected the full schema, got {count} tables");
+        assert!(n[0].get("c").unwrap().as_i64().unwrap() >= 20);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

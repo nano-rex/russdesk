@@ -5,14 +5,23 @@
 //! The API routers (client/admin/rest), models and the viewer are ported in
 //! later milestones; see MIGRATION.md.
 
+#[macro_use]
+mod json;
 mod app;
 mod auth;
 mod authz;
+mod client_api;
 mod config;
+mod crypto;
 mod db;
+mod encoding;
 mod mail;
 mod models;
+mod rand;
+mod rest_api;
 mod security;
+mod smtp;
+mod sqlite;
 mod strategy_options;
 mod web;
 
@@ -76,6 +85,15 @@ fn main() {
             ("Referrer-Policy".into(), "no-referrer".into()),
         ],
     };
+
+    // Periodic maintenance (expired tokens, log retention, pending logins).
+    {
+        let app = app.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(300));
+            app.maintenance();
+        });
+    }
 
     let handler = {
         let app = app.clone();

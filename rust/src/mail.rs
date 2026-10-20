@@ -1,10 +1,9 @@
-//! Outgoing email over SMTP (Settings > SMTP). Port of mail.py.
-
-use lettre::message::Mailbox;
-use lettre::transport::smtp::authentication::Credentials;
-use lettre::{Message, SmtpTransport, Transport};
+//! Outgoing email over SMTP (Settings > SMTP). Port of mail.py, using our own
+//! plaintext SMTP client (crate::smtp). For TLS to external providers, point the
+//! SMTP host at a local relay (msmtp/postfix) that does the TLS.
 
 use crate::db::Settings;
+use crate::smtp::{self, Mail};
 use crate::web::HttpError;
 
 pub fn configured(s: &Settings) -> bool {
@@ -19,43 +18,21 @@ pub fn send(s: &Settings, to: &str, subject: &str, body: &str) -> Result<(), Htt
             "Email is not set up: fill in Settings > SMTP first",
         ));
     }
-    let from: Mailbox = format!("RussDesk <{}>", s.smtp_from)
-        .parse()
-        .map_err(|_| HttpError::new(400, "Invalid SMTP from address"))?;
-    let to_box: Mailbox = to
-        .parse()
-        .map_err(|_| HttpError::new(400, "Invalid recipient address"))?;
-    let email = Message::builder()
-        .from(from)
-        .to(to_box)
-        .subject(subject)
-        .body(body.to_string())
-        .map_err(|e| HttpError::new(500, format!("Could not build email: {e}")))?;
-
-    let host = s.smtp_host.as_str();
-    let port = s.smtp_port as u16;
-    let mut builder = match s.smtp_security.as_str() {
-        "ssl" => SmtpTransport::relay(host)
-            .map_err(smtp_err)?
-            .port(if port != 0 { port } else { 465 }),
-        "starttls" => SmtpTransport::starttls_relay(host)
-            .map_err(smtp_err)?
-            .port(if port != 0 { port } else { 587 }),
-        _ => SmtpTransport::builder_dangerous(host).port(if port != 0 { port } else { 587 }),
-    };
-    if !s.smtp_user.is_empty() {
-        builder = builder.credentials(Credentials::new(
-            s.smtp_user.clone(),
-            s.smtp_password.clone(),
-        ));
+    if !to.contains('@') {
+        return Err(HttpError::new(400, "Invalid recipient address"));
     }
-    let transport = builder.build();
-    transport.send(&email).map_err(smtp_err)?;
-    Ok(())
-}
-
-fn smtp_err(e: lettre::transport::smtp::Error) -> HttpError {
-    HttpError::new(502, format!("Could not send email: {e}"))
+    let port = if s.smtp_port > 0 { s.smtp_port as u16 } else { 587 };
+    let mail = Mail {
+        host: &s.smtp_host,
+        port,
+        user: &s.smtp_user,
+        password: &s.smtp_password,
+        from: &s.smtp_from,
+        to,
+        subject,
+        body,
+    };
+    smtp::send(&mail).map_err(|e| HttpError::new(502, format!("Could not send email: {e}")))
 }
 
 #[cfg(test)]
@@ -75,7 +52,6 @@ mod tests {
     #[test]
     fn send_unconfigured_errors() {
         let s = Settings::default();
-        let err = send(&s, "a@b.com", "hi", "body").unwrap_err();
-        assert_eq!(err.status, 400);
+        assert_eq!(send(&s, "a@b.com", "hi", "body").unwrap_err().status, 400);
     }
 }

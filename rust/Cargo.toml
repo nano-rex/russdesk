@@ -10,19 +10,10 @@ license = "AGPL-3.0-only"
 name = "russdesk"
 path = "src/main.rs"
 
+# No third-party crates: the standard library only. SQLite is the official
+# amalgamation vendored under vendor/sqlite and compiled by build.rs; everything
+# else (JSON, crypto, encodings, RNG, SMTP, HTTP) is implemented in-tree.
 [dependencies]
-rusqlite = { version = "0.31", features = ["bundled"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-scrypt = { version = "0.11", default-features = false }
-sha2 = "0.10"
-sha1 = "0.10"
-hmac = "0.12"
-base64 = "0.22"
-data-encoding = "2"        # base32 for TOTP secrets
-subtle = "2"               # constant-time comparisons
-getrandom = "0.2"
-lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
 
 [profile.release]
 opt-level = 2

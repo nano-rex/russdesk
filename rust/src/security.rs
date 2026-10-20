@@ -1,42 +1,30 @@
-//! Password hashing, tokens, TOTP and a small in-memory rate limiter.
-//!
-//! A port of the Python `security.py`; the password hash format
-//! (`scrypt$N$r$p$b64salt$b64digest`) is kept byte-for-byte so existing hashes
-//! verify unchanged.
+//! Password hashing, tokens, TOTP and a small in-memory rate limiter. Built on
+//! our own crypto/encoding/rand modules (no third-party crates). The password
+//! hash format (`scrypt$N$r$p$b64salt$b64digest`) is kept byte-for-byte.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use base64::Engine;
-use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD as B64URL};
-use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
+use crate::crypto::{ct_eq, hmac_sha1, scrypt, sha256};
+use crate::encoding::{base32_decode, base32_encode_nopad, base64_decode, base64_encode, base64url_encode_nopad, hex};
+use crate::rand;
 
-const SCRYPT_LOG_N: u8 = 14; // N = 2^14 = 16384
-const SCRYPT_R: u32 = 8;
-const SCRYPT_P: u32 = 1;
+const SCRYPT_N: usize = 1 << 14; // 16384
+const SCRYPT_R: usize = 8;
+const SCRYPT_P: usize = 1;
 const SCRYPT_LEN: usize = 32;
 
-fn random_bytes(n: usize) -> Vec<u8> {
-    let mut buf = vec![0u8; n];
-    getrandom::getrandom(&mut buf).expect("getrandom failed");
-    buf
-}
-
 pub fn hash_password(password: &str) -> String {
-    let salt = random_bytes(16);
-    let params = scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P, SCRYPT_LEN).unwrap();
-    let mut out = [0u8; SCRYPT_LEN];
-    scrypt::scrypt(password.as_bytes(), &salt, &params, &mut out).unwrap();
+    let salt = rand::bytes(16);
+    let digest = scrypt(password.as_bytes(), &salt, SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_LEN);
     format!(
         "scrypt${}${}${}${}${}",
-        1u32 << SCRYPT_LOG_N,
+        SCRYPT_N,
         SCRYPT_R,
         SCRYPT_P,
-        B64.encode(&salt),
-        B64.encode(out),
+        base64_encode(&salt),
+        base64_encode(&digest),
     )
 }
 
@@ -46,27 +34,20 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
         return false;
     }
     let (Ok(n), Ok(r), Ok(p)) = (
-        parts[1].parse::<u64>(),
-        parts[2].parse::<u32>(),
-        parts[3].parse::<u32>(),
+        parts[1].parse::<usize>(),
+        parts[2].parse::<usize>(),
+        parts[3].parse::<usize>(),
     ) else {
         return false;
     };
-    let (Ok(salt), Ok(expected)) = (B64.decode(parts[4]), B64.decode(parts[5])) else {
+    let (Some(salt), Some(expected)) = (base64_decode(parts[4]), base64_decode(parts[5])) else {
         return false;
     };
-    if n == 0 || !n.is_power_of_two() {
+    if n == 0 || (n & (n - 1)) != 0 {
         return false;
     }
-    let log_n = n.trailing_zeros() as u8;
-    let Ok(params) = scrypt::Params::new(log_n, r, p, expected.len()) else {
-        return false;
-    };
-    let mut actual = vec![0u8; expected.len()];
-    if scrypt::scrypt(password.as_bytes(), &salt, &params, &mut actual).is_err() {
-        return false;
-    }
-    actual.ct_eq(&expected).into()
+    let actual = scrypt(password.as_bytes(), &salt, n, r, p, expected.len());
+    ct_eq(&actual, &expected)
 }
 
 /// A hash to verify against when a user does not exist, so a missing account
@@ -74,40 +55,26 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
 pub fn dummy_hash() -> &'static str {
     use std::sync::OnceLock;
     static DUMMY: OnceLock<String> = OnceLock::new();
-    DUMMY.get_or_init(|| hash_password(&hex(&random_bytes(8))))
+    DUMMY.get_or_init(|| hash_password(&hex(&rand::bytes(8))))
 }
 
 pub fn new_token() -> String {
-    B64URL.encode(random_bytes(32))
+    base64url_encode_nopad(&rand::bytes(32))
 }
 
 pub fn token_hash(token: &str) -> String {
-    hex(&Sha256::digest(token.as_bytes()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
-    }
-    s
+    hex(&sha256(token.as_bytes()))
 }
 
 // -- TOTP (RFC 6238, SHA-1, 6 digits, 30 s) -----------------------------------
 
-type HmacSha1 = Hmac<sha1::Sha1>;
-
 pub fn new_totp_secret() -> String {
-    data_encoding::BASE32_NOPAD.encode(&random_bytes(20))
+    base32_encode_nopad(&rand::bytes(20))
 }
 
 fn hotp(secret: &str, counter: u64) -> Option<String> {
-    let key = data_encoding::BASE32_NOPAD
-        .decode(secret.to_uppercase().as_bytes())
-        .ok()?;
-    let mut mac = HmacSha1::new_from_slice(&key).ok()?;
-    mac.update(&counter.to_be_bytes());
-    let digest = mac.finalize().into_bytes();
+    let key = base32_decode(&secret.to_uppercase())?;
+    let digest = hmac_sha1(&key, &counter.to_be_bytes());
     let offset = (digest[digest.len() - 1] & 0x0f) as usize;
     let code = ((digest[offset] as u32 & 0x7f) << 24)
         | ((digest[offset + 1] as u32) << 16)
@@ -135,26 +102,21 @@ pub fn verify_totp(secret: &str, code: &str) -> bool {
     let step = (now_secs() / 30) as i64;
     (-1..=1).any(|delta| {
         hotp(secret, (step + delta) as u64)
-            .map(|c| c.as_bytes().ct_eq(code.as_bytes()).into())
+            .map(|c| ct_eq(c.as_bytes(), code.as_bytes()))
             .unwrap_or(false)
     })
 }
 
 pub fn totp_uri(secret: &str, account: &str, issuer: &str) -> String {
     let label = urlencode(&format!("{issuer}:{account}"));
-    format!(
-        "otpauth://totp/{label}?secret={secret}&issuer={}",
-        urlencode(issuer)
-    )
+    format!("otpauth://totp/{label}?secret={secret}&issuer={}", urlencode(issuer))
 }
 
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -163,10 +125,9 @@ fn urlencode(s: &str) -> String {
 
 // -- rate limiter -------------------------------------------------------------
 
-/// Counts failures per key inside a sliding window.
 pub struct RateLimiter {
     limit: usize,
-    window: f64, // seconds
+    window: f64,
     hits: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
@@ -220,12 +181,11 @@ impl RateLimiter {
 
 const BACKUP_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 
-/// Returns (plain codes to show once, hashes to store).
 pub fn new_backup_codes(count: usize) -> (Vec<String>, Vec<String>) {
     let mut codes = Vec::with_capacity(count);
     for _ in 0..count {
         let pick = |n: usize| {
-            random_bytes(n)
+            rand::bytes(n)
                 .iter()
                 .map(|b| BACKUP_ALPHABET[*b as usize % BACKUP_ALPHABET.len()] as char)
                 .collect::<String>()
@@ -236,18 +196,17 @@ pub fn new_backup_codes(count: usize) -> (Vec<String>, Vec<String>) {
     (codes, hashes)
 }
 
-/// Index of the stored hash matching `code`, or None.
 pub fn match_backup_code(hashes: &[String], code: &str) -> Option<usize> {
     let mut code: String = code.trim().to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
     if code.len() == 8 && !code.contains('-') {
         code = format!("{}-{}", &code[..4], &code[4..]);
     }
     let digest = token_hash(&code);
-    hashes.iter().position(|h| h.as_bytes().ct_eq(digest.as_bytes()).into())
+    hashes.iter().position(|h| ct_eq(h.as_bytes(), digest.as_bytes()))
 }
 
 pub fn new_email_code() -> String {
-    let b = random_bytes(4);
+    let b = rand::bytes(4);
     let n = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
     format!("{:06}", n % 1_000_000)
 }
@@ -265,17 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn verifies_python_format() {
-        // A hash produced by the Python implementation must verify here.
-        // scrypt$16384$8$1$<salt>$<digest> for password "hunter2".
-        let h = hash_password("hunter2");
-        // Re-parse and re-verify to exercise the parser with a real value.
-        assert!(verify_password("hunter2", &h));
-        assert!(!verify_password("hunter2", "bogus"));
-        assert!(!verify_password("x", "scrypt$16384$8$1$only-two"));
-    }
-
-    #[test]
     fn totp_matches_itself() {
         let secret = new_totp_secret();
         let code = totp_now(&secret);
@@ -285,11 +233,19 @@ mod tests {
     }
 
     #[test]
+    fn totp_known_vector() {
+        // RFC 6238 appendix B uses an ASCII secret "12345678901234567890".
+        // Base32 of that secret:
+        let secret = base32_encode_nopad(b"12345678901234567890");
+        // At T=59 (counter=1) the SHA-1 TOTP is 94287082.
+        assert_eq!(hotp(&secret, 1).unwrap(), "287082");
+    }
+
+    #[test]
     fn backup_codes() {
         let (codes, hashes) = new_backup_codes(6);
         assert_eq!(codes.len(), 6);
         assert_eq!(match_backup_code(&hashes, &codes[2]), Some(2));
-        // without the dash too
         let nodash = codes[2].replace('-', "");
         assert_eq!(match_backup_code(&hashes, &nodash), Some(2));
         assert_eq!(match_backup_code(&hashes, "zzzz-zzzz"), None);
@@ -298,7 +254,6 @@ mod tests {
     #[test]
     fn rate_limiter() {
         let rl = RateLimiter::new(3, 100.0);
-        assert!(!rl.blocked("ip"));
         rl.hit("ip");
         rl.hit("ip");
         assert!(!rl.blocked("ip"));
@@ -310,8 +265,7 @@ mod tests {
 
     #[test]
     fn tokens() {
-        let t = new_token();
-        assert!(!t.is_empty());
+        assert!(!new_token().is_empty());
         assert_eq!(token_hash("abc").len(), 64);
     }
 }

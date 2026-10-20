@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::db::Database;
+use crate::db::{Database, SqlValue};
 use crate::web::{HttpError, HttpResult};
 
 /// (name, label, role types it is valid for). Follows Pro's admin roles.
@@ -218,27 +218,24 @@ impl Actor {
         let Some(uid) = self.user_id else {
             return vec![];
         };
-        db.with_conn(|c| {
-            let mut stmt = c.prepare(
+        let rows = db
+            .query(
                 "SELECT r.type, r.perms, r.user_groups, r.device_groups, r.unassigned \
                  FROM admin_roles r JOIN user_admin_roles ur ON ur.role_id = r.id \
                  WHERE ur.user_id = ?1",
-            )?;
-            let rows = stmt
-                .query_map([uid], |row| {
-                    Ok(RoleRow {
-                        rtype: row.get(0)?,
-                        perms: row.get(1)?,
-                        user_groups: row.get(2)?,
-                        device_groups: row.get(3)?,
-                        unassigned: row.get::<_, i64>(4)? != 0,
-                    })
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            Ok(rows)
-        })
-        .unwrap_or_default()
+                &[SqlValue::Int(uid)],
+            )
+            .unwrap_or_default();
+        let field = |r: &crate::db::Row, k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        rows.iter()
+            .map(|r| RoleRow {
+                rtype: field(r, "type"),
+                perms: field(r, "perms"),
+                user_groups: field(r, "user_groups"),
+                device_groups: field(r, "device_groups"),
+                unassigned: r.get("unassigned").and_then(|v| v.as_i64()).unwrap_or(0) != 0,
+            })
+            .collect()
     }
 
     /// The Scope `perm` covers for this actor (possibly empty).
@@ -286,11 +283,11 @@ impl Actor {
     }
 
     fn token_scope(&self, perm: &str) -> Scope {
-        let perms: serde_json::Value = self
+        let perms: crate::json::Value = self
             .token_perms
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(serde_json::json!({}));
+            .and_then(|s| crate::json::from_str(s).ok())
+            .unwrap_or(json!({}));
         let (area, action) = perm.split_once('.').unwrap_or((perm, ""));
         for resource in ["device", "audit", "user", "group", "strategy"] {
             if token_resource_areas(resource).contains(&area) {
@@ -320,7 +317,7 @@ impl Actor {
         let Some(perms) = &self.token_perms else {
             return 0;
         };
-        serde_json::from_str::<serde_json::Value>(perms)
+        crate::json::from_str(perms)
             .ok()
             .and_then(|v| v.get("ab").and_then(|x| x.as_i64()))
             .unwrap_or(0)
@@ -347,42 +344,39 @@ struct RoleRow {
 }
 
 fn json_int_set(s: &str) -> BTreeSet<i64> {
-    serde_json::from_str::<Vec<i64>>(s).unwrap_or_default().into_iter().collect()
+    match crate::json::from_str(s) {
+        Ok(crate::json::Value::Array(a)) => a.iter().filter_map(|v| v.as_i64()).collect(),
+        _ => BTreeSet::new(),
+    }
 }
 
 fn json_str_set(s: &str) -> BTreeSet<String> {
-    serde_json::from_str::<Vec<String>>(s).unwrap_or_default().into_iter().collect()
+    match crate::json::from_str(s) {
+        Ok(crate::json::Value::Array(a)) => {
+            a.iter().filter_map(|v| v.as_str().map(|x| x.to_string())).collect()
+        }
+        _ => BTreeSet::new(),
+    }
 }
 
 pub fn device_in_scope(db: &Database, scope: &Scope, device_id: &str) -> bool {
     let (cond, params) = scope.device_sql("d");
-    db.with_conn(|c| {
-        let sql = format!("SELECT 1 FROM devices d WHERE d.id = ?1 AND {cond}");
-        let mut stmt = c.prepare(&sql)?;
-        let mut args: Vec<rusqlite::types::Value> =
-            vec![rusqlite::types::Value::Text(device_id.to_string())];
-        args.extend(params.into_iter().map(rusqlite::types::Value::Integer));
-        let found = stmt
-            .query_row(rusqlite::params_from_iter(args), |_| Ok(()))
-            .is_ok();
-        Ok(found)
-    })
-    .unwrap_or(false)
+    let mut args: Vec<SqlValue> = vec![SqlValue::Text(device_id.to_string())];
+    args.extend(params.into_iter().map(SqlValue::Int));
+    db.query_one(&format!("SELECT 1 AS n FROM devices d WHERE d.id = ? AND {cond}"), &args)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 pub fn user_in_scope(db: &Database, scope: &Scope, user_id: i64) -> bool {
     let (cond, params) = scope.user_sql("u");
-    db.with_conn(|c| {
-        let sql = format!("SELECT 1 FROM users u WHERE u.id = ?1 AND {cond}");
-        let mut stmt = c.prepare(&sql)?;
-        let mut args: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::Integer(user_id)];
-        args.extend(params.into_iter().map(rusqlite::types::Value::Integer));
-        let found = stmt
-            .query_row(rusqlite::params_from_iter(args), |_| Ok(()))
-            .is_ok();
-        Ok(found)
-    })
-    .unwrap_or(false)
+    let mut args: Vec<SqlValue> = vec![SqlValue::Int(user_id)];
+    args.extend(params.into_iter().map(SqlValue::Int));
+    db.query_one(&format!("SELECT 1 AS n FROM users u WHERE u.id = ? AND {cond}"), &args)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 #[cfg(test)]

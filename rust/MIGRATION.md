@@ -1,62 +1,68 @@
 # Python → Rust rewrite
 
 The RussDesk server is being rewritten from Python into Rust to match the
-client's language. The rewrite lives here in `rust/` and is landed in compiling,
+client's language. The rewrite lives in `rust/` and is landed in compiling,
 tested milestones. The Python server at the repo root stays the working server
 until the Rust port reaches feature + test parity, so `main` is always
-deployable and testable (including on the VPS) during the migration.
+deployable and testable during the migration.
 
-Stack: std-only threaded HTTP (mirroring the Python `ThreadingHTTPServer`
-design) + `rusqlite` (bundled SQLite) + RustCrypto (`scrypt`, `sha2`, `sha1`,
-`hmac`) + `serde_json`. No async runtime, few dependencies — the same "lean,
-no framework" spirit as the Python version. The viewer milestone will reuse the
-vendored `hbb_common` crate for the RustDesk peer protocol.
+**Zero third-party crates.** Per project policy the Rust server uses the
+standard library only. SQLite is the official single-file amalgamation vendored
+under `vendor/sqlite` and compiled by `build.rs` with the system C compiler;
+everything else is implemented and reviewable in-tree:
+
+| Concern | In-house module |
+| --- | --- |
+| JSON value/parser/serializer + `json!` | `src/json.rs` |
+| SHA-1, SHA-256, HMAC, PBKDF2, scrypt, constant-time eq | `src/crypto.rs` |
+| base64 / base32 / hex | `src/encoding.rs` |
+| OS randomness (`/dev/urandom`) | `src/rand.rs` |
+| SQLite FFI over the vendored amalgamation | `src/sqlite.rs` + `build.rs` |
+| Plaintext SMTP (TLS via a local relay) | `src/smtp.rs` |
+| Threaded HTTP/1.1 server + router | `src/web.rs` |
 
 ## Status
 
 | Python module | Lines | Rust | State |
 | --- | --- | --- | --- |
 | `config.py` | 54 | `src/config.rs` | ✅ ported |
-| `web.py` | 179 | `src/web.rs` | ✅ ported (server, router, request/response) |
+| `web.py` | 179 | `src/web.rs` | ✅ ported (threaded server, router, request/response) |
 | `security.py` | 143 | `src/security.rs` | ✅ ported (scrypt hash format kept, TOTP, rate limiter, backup codes) |
-| `app.py` | 150 | `src/app.rs` | ◻ partial (static files, health; API routing stubbed) |
-| `__main__.py` | 55 | `src/main.rs` | ◻ partial (serve, args; `--reset-password` pending DB) |
-| `db.py` | 475 | `src/db.rs` | ✅ ported (consolidated schema, typed settings, JSON-row helpers) |
-| `models.py` | 515 | `src/models.rs` | ✅ ported (constants, helpers, device/strategy/address-book logic, audit) |
-| `authz.py` | 210 | `src/authz.rs` | ✅ ported (Scope, Actor, permissions, API-token scopes) |
-| `mail.py` | 40 | `src/mail.rs` | ✅ ported (SMTP via lettre; starttls/ssl/none) |
-| `strategy_options.py` | 85 | `src/strategy_options.rs` | ✅ ported (43-option catalogue) |
-| `auth.py` | 144 | `src/auth.rs` | ✅ ported (password login, rate limit, login alarms, 2FA challenges) |
-| `client_api.py` | 976 | — | ⬜ M4 (the client-facing HTTP API) |
-| `rest_api.py` | 725 | — | ⬜ M4 |
+| `db.py` | 475 | `src/db.rs` | ✅ ported (schema, typed settings, JSON-row helpers over the FFI) |
+| `models.py` | 515 | `src/models.rs` | ✅ ported |
+| `authz.py` | 210 | `src/authz.rs` | ✅ ported |
+| `mail.py` | 40 | `src/mail.rs` | ✅ ported (own SMTP client) |
+| `strategy_options.py` | 85 | `src/strategy_options.rs` | ✅ ported |
+| `auth.py` | 144 | `src/auth.rs` | ✅ ported |
+| `app.py` | 150 | `src/app.rs` | ✅ ported (routing, bootstrap, static, maintenance) |
+| `__main__.py` | 55 | `src/main.rs` | ✅ ported |
+| `client_api.py` | 976 | `src/client_api.rs` | ✅ ported (all 33 client/ab/record endpoints) |
+| `rest_api.py` | 725 | `src/rest_api.rs` | ⬜ M4 (stub; registering routes next) |
 | `admin_api.py` | 1913 | — | ⬜ M5 (the console API) |
 | `tools/rdproto.py` | — | — | ⬜ M6 (browser viewer, reusing `hbb_common`) |
 
 ## Milestones
 
 - **M1 (done):** foundation — config, HTTP/web layer, security primitives,
-  SQLite open + settings, a running server (health + static console shell).
-  `cargo test` green; server verified serving `/api/health` and the SPA shell.
-- **M2 (done):** full DB schema + typed settings, `models.rs` (devices,
-  strategies, address books, audit), `authz` (scopes/roles/token perms),
-  `mail` (SMTP), `strategy_options`. `cargo test` green (31 tests).
-- **M3 (done):** `auth` — password login, rate limiting, login alarms, TOTP/backup/email 2FA challenges. 35 tests green.
-- **M4:** `client_api` + `rest_api`, run the Pro management scripts against them.
+  SQLite open + settings, running server.
+- **M2 (done):** full DB schema + typed settings, models, authz, mail,
+  strategy_options.
+- **M3 (done):** auth — login, rate limiting, login alarms, 2FA challenges.
+- **M3.5 (done):** removed all third-party crates — in-house JSON, crypto,
+  encodings, RNG, SQLite FFI and SMTP; the crate now builds with std only.
+- **M4 (in progress):** `client_api` done (login/heartbeat/sysinfo/audit/
+  accessible lists/address books/recordings), verified end to end against the
+  running server; `rest_api` next.
 - **M5:** `admin_api` (the console) — the largest module.
 - **M6:** the browser viewer (peer protocol via `hbb_common`).
-
-Parity is tracked against the existing Python test suite (`tests/`): each
-milestone ports the relevant tests to Rust (`cargo test`) and/or keeps the
-Python integration tests passing against the equivalent endpoints. The Python
-tree is removed only once M1–M5 reach parity.
 
 ## Build & run
 
 ```sh
 cd rust
-cargo test
-cargo run -- --host 127.0.0.1 --port 31114
+cargo test                 # 51 tests, std only
+cargo run --release -- --host 127.0.0.1 --port 31114
 ```
 
-The static console assets in `rust/static/` are the same SPA as the Python
-server's and are shared between the two during the migration.
+Use `--release`: the pure-Rust scrypt is intentionally expensive, so debug
+builds are slow to hash passwords.

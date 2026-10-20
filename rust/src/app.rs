@@ -1,12 +1,15 @@
-//! Application wiring: config, database, request handling and static files.
-//! Port of app.py's App (routing for the API modules lands per MIGRATION.md).
+//! Application wiring: config, database, routing, static files, bootstrap and
+//! maintenance. Port of app.py.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::db::Database;
-use crate::web::{error_response, json_response, Request, Response};
+use crate::db::{int, now, text, Database};
+use crate::models::{new_guid, personal_book};
+use crate::security::hash_password;
+use crate::web::{error_response, json_response, Match, Request, Response, Router};
+use crate::{client_api, rest_api};
 
 const CSP: &str = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
@@ -14,14 +17,70 @@ connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 pub struct App {
     pub cfg: Config,
     pub db: Arc<Database>,
+    router: Router<App>,
 }
 
 impl App {
     pub fn new(cfg: Config) -> Self {
         let db = Database::open(&cfg.db_path()).expect("failed to open database");
-        App {
+        let mut router = Router::new();
+        router.add("GET", "/api/health", |_app, _req, _p| {
+            Ok(json_response(
+                &json!({ "ok": true, "service": "russdesk" }),
+                200,
+            ))
+        });
+        client_api::register(&mut router);
+        rest_api::register(&mut router);
+        let app = App {
             cfg,
             db: Arc::new(db),
+            router,
+        };
+        app.bootstrap_admin();
+        app
+    }
+
+    fn bootstrap_admin(&self) {
+        let exists = self
+            .db
+            .query_one("SELECT 1 AS n FROM users LIMIT 1", &[])
+            .ok()
+            .flatten()
+            .is_some();
+        if exists {
+            return;
+        }
+        let generated = self.cfg.admin_password.is_empty();
+        let password = if generated {
+            crate::encoding::base64url_encode_nopad(&crate::rand::bytes(9))
+        } else {
+            self.cfg.admin_password.clone()
+        };
+        let id = self
+            .db
+            .insert(
+                "INSERT INTO users(guid, name, password_hash, is_admin, status, created_at) \
+                 VALUES (?1, ?2, ?3, 1, 1, ?4)",
+                &[
+                    text(new_guid()),
+                    text(&self.cfg.admin_user),
+                    text(hash_password(&password)),
+                    int(now()),
+                ],
+            )
+            .expect("failed to create admin");
+        personal_book(&self.db, id);
+        if generated {
+            eprintln!(
+                "Created administrator {:?} with password: {}",
+                self.cfg.admin_user, password
+            );
+        } else {
+            eprintln!(
+                "Created administrator {:?} from RUSSDESK_ADMIN_PASSWORD",
+                self.cfg.admin_user
+            );
         }
     }
 
@@ -36,12 +95,14 @@ impl App {
     }
 
     fn route(&self, req: &Request) -> Response {
-        // M1: only the health endpoint; the API routers are ported in M2+.
-        match (req.method.as_str(), req.path.as_str()) {
-            ("GET", "/api/health") => {
-                json_response(&serde_json::json!({ "ok": true, "service": "russdesk" }), 200)
+        match self.router.match_route(&req.method, &req.path) {
+            Match::Found(handler, params) => {
+                let mut resp = handler(self, req, &params).unwrap_or_else(|e| e.into());
+                resp.headers.push(("Cache-Control".into(), "no-store".into()));
+                resp
             }
-            _ => error_response(404, "Not found"),
+            Match::MethodNotAllowed => error_response(405, "Method not allowed"),
+            Match::NotFound => error_response(404, "Not found"),
         }
     }
 
@@ -52,14 +113,11 @@ impl App {
         };
         let rel = path.trim_start_matches('/');
         let rel = if rel.is_empty() { "index.html" } else { rel };
-
         let candidate = root.join(rel);
         let full = match std::fs::canonicalize(&candidate) {
             Ok(f) if f.starts_with(&root) && f.is_file() => f,
-            // Single-page app: unknown paths get the shell.
             _ => root.join("index.html"),
         };
-
         let data = match std::fs::read(&full) {
             Ok(d) => d,
             Err(_) => return error_response(404, "Not found"),
@@ -72,6 +130,37 @@ impl App {
                 .with_header("X-Frame-Options", "DENY");
         }
         resp
+    }
+
+    /// Periodic cleanup (app.py maintenance).
+    pub fn maintenance(&self) {
+        let db = &self.db;
+        let _ = db.execute("DELETE FROM nonces WHERE created_at < ?1", &[int(now() - 600)]);
+        let _ = db.execute("DELETE FROM tokens WHERE expires_at < ?1", &[int(now())]);
+        let _ = db.execute(
+            "DELETE FROM pending_disconnects WHERE created_at < ?1",
+            &[int(now() - 300)],
+        );
+        let days = db.settings().log_retention_days;
+        if days > 0 {
+            let cutoff = now() - days * 86400;
+            for (table, col) in [
+                ("conn_logs", "started_at"),
+                ("file_logs", "created_at"),
+                ("alarm_logs", "created_at"),
+                ("console_logs", "created_at"),
+            ] {
+                let _ = db.execute(
+                    &format!("DELETE FROM {table} WHERE {col} < ?1"),
+                    &[int(cutoff)],
+                );
+            }
+        }
+        let _ = db.execute(
+            "UPDATE users SET invite_hash = '' WHERE status = -1 AND invite_expires < ?1",
+            &[int(now())],
+        );
+        crate::auth::expire_pending();
     }
 }
 
@@ -103,9 +192,4 @@ pub fn body_limit(path: &str) -> usize {
     } else {
         2 * 1024 * 1024
     }
-}
-
-/// The static directory as an absolute path (for logging/diagnostics).
-pub fn static_dir_abs(cfg: &Config) -> PathBuf {
-    std::fs::canonicalize(cfg.static_dir()).unwrap_or_else(|_| cfg.static_dir().to_path_buf())
 }
