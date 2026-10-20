@@ -6,9 +6,13 @@
 //! later milestones; see MIGRATION.md.
 
 mod app;
+mod authz;
 mod config;
 mod db;
+mod mail;
+mod models;
 mod security;
+mod strategy_options;
 mod web;
 
 use std::sync::Arc;

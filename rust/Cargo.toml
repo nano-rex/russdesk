@@ -22,6 +22,7 @@ base64 = "0.22"
 data-encoding = "2"        # base32 for TOTP secrets
 subtle = "2"               # constant-time comparisons
 getrandom = "0.2"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
 
 [profile.release]
 opt-level = 2

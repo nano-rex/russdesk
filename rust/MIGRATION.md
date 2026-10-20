@@ -21,11 +21,11 @@ vendored `hbb_common` crate for the RustDesk peer protocol.
 | `security.py` | 143 | `src/security.rs` | ✅ ported (scrypt hash format kept, TOTP, rate limiter, backup codes) |
 | `app.py` | 150 | `src/app.rs` | ◻ partial (static files, health; API routing stubbed) |
 | `__main__.py` | 55 | `src/main.rs` | ◻ partial (serve, args; `--reset-password` pending DB) |
-| `db.py` | 475 | `src/db.rs` | ◻ foundation only (connection, pragmas, `now`, settings kv) |
-| `models.py` | 515 | — | ⬜ M2 |
-| `authz.py` | 210 | — | ⬜ M2 |
-| `mail.py` | 40 | — | ⬜ M2 |
-| `strategy_options.py` | 85 | — | ⬜ M2 |
+| `db.py` | 475 | `src/db.rs` | ✅ ported (consolidated schema, typed settings, JSON-row helpers) |
+| `models.py` | 515 | `src/models.rs` | ✅ ported (constants, helpers, device/strategy/address-book logic, audit) |
+| `authz.py` | 210 | `src/authz.rs` | ✅ ported (Scope, Actor, permissions, API-token scopes) |
+| `mail.py` | 40 | `src/mail.rs` | ✅ ported (SMTP via lettre; starttls/ssl/none) |
+| `strategy_options.py` | 85 | `src/strategy_options.rs` | ✅ ported (43-option catalogue) |
 | `auth.py` | 144 | — | ⬜ M3 |
 | `client_api.py` | 976 | — | ⬜ M4 (the client-facing HTTP API) |
 | `rest_api.py` | 725 | — | ⬜ M4 |
@@ -37,7 +37,9 @@ vendored `hbb_common` crate for the RustDesk peer protocol.
 - **M1 (done):** foundation — config, HTTP/web layer, security primitives,
   SQLite open + settings, a running server (health + static console shell).
   `cargo test` green; server verified serving `/api/health` and the SPA shell.
-- **M2:** full DB schema + `models.rs`, `authz`, `mail`, `strategy_options`.
+- **M2 (done):** full DB schema + typed settings, `models.rs` (devices,
+  strategies, address books, audit), `authz` (scopes/roles/token perms),
+  `mail` (SMTP), `strategy_options`. `cargo test` green (31 tests).
 - **M3:** `auth` (login, 2FA challenges, login alarms).
 - **M4:** `client_api` + `rest_api`, run the Pro management scripts against them.
 - **M5:** `admin_api` (the console) — the largest module.
