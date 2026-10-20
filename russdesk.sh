@@ -145,7 +145,14 @@ if [ "$CMD" = uninstall ]; then
     if [ "$PURGE" -eq 1 ]; then
         say "Deleting data, settings and the russdesk user"
         rm -rf "$DATA_DIR" "$HBBS_DIR" "$ENV_FILE" "$HBBS_ENV"
-        if id "$SVC_USER" >/dev/null 2>&1; then userdel "$SVC_USER" 2>/dev/null || true; fi
+        if id "$SVC_USER" >/dev/null 2>&1; then
+            pkill -u "$SVC_USER" 2>/dev/null || true  # anything still running as the service user
+            i=0
+            while pgrep -u "$SVC_USER" >/dev/null 2>&1 && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+            pkill -9 -u "$SVC_USER" 2>/dev/null || true
+            userdel "$SVC_USER" 2>/dev/null || echo "warning: could not delete the $SVC_USER user: $(userdel "$SVC_USER" 2>&1)"
+        fi
+        if getent group "$SVC_USER" >/dev/null 2>&1; then groupdel "$SVC_USER" 2>/dev/null || true; fi
         echo "RussDesk is completely removed."
     else
         echo "RussDesk is removed. Reinstall to pick up the kept data, or run: sudo sh $0 uninstall --purge"

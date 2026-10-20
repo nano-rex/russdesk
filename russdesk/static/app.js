@@ -1094,7 +1094,9 @@ async function pageAddressBook(guid, view, mainEl) {
   if (!mainEl.isConnected) return;  // the user navigated away meanwhile
   const canWrite = b.rule >= 2;
   const full = b.rule >= 3;
-  const reload = () => pageAddressBook(guid, view, mainEl).catch(fail);
+  // Re-render whatever the user is looking at now: an action can finish
+  // after they switched tabs, and this view may already be gone.
+  const reload = () => route();
   const tagColor = Object.fromEntries(b.tags.map((t) => [t.name, t.color]));
   setPage(b.name,
     h("a", { class: "btn", href: "#/address-books" }, "‹ All books"),

@@ -330,6 +330,8 @@ class Device:
                 result = first(msg, 1, 0)
                 self.event("register_pk", REGISTER_PK_RESULTS.get(result, result))
                 if result == 0:
+                    # A new ID only counts as online from its next registration.
+                    last = 0
                     self.registered.set()
             elif name in ("punch_hole", "fetch_local_addr"):
                 socket_addr, relay = first(msg, 1, b""), text(msg, 2)
