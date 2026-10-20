@@ -26,7 +26,7 @@ vendored `hbb_common` crate for the RustDesk peer protocol.
 | `authz.py` | 210 | `src/authz.rs` | ✅ ported (Scope, Actor, permissions, API-token scopes) |
 | `mail.py` | 40 | `src/mail.rs` | ✅ ported (SMTP via lettre; starttls/ssl/none) |
 | `strategy_options.py` | 85 | `src/strategy_options.rs` | ✅ ported (43-option catalogue) |
-| `auth.py` | 144 | — | ⬜ M3 |
+| `auth.py` | 144 | `src/auth.rs` | ✅ ported (password login, rate limit, login alarms, 2FA challenges) |
 | `client_api.py` | 976 | — | ⬜ M4 (the client-facing HTTP API) |
 | `rest_api.py` | 725 | — | ⬜ M4 |
 | `admin_api.py` | 1913 | — | ⬜ M5 (the console API) |
@@ -40,7 +40,7 @@ vendored `hbb_common` crate for the RustDesk peer protocol.
 - **M2 (done):** full DB schema + typed settings, `models.rs` (devices,
   strategies, address books, audit), `authz` (scopes/roles/token perms),
   `mail` (SMTP), `strategy_options`. `cargo test` green (31 tests).
-- **M3:** `auth` (login, 2FA challenges, login alarms).
+- **M3 (done):** `auth` — password login, rate limiting, login alarms, TOTP/backup/email 2FA challenges. 35 tests green.
 - **M4:** `client_api` + `rest_api`, run the Pro management scripts against them.
 - **M5:** `admin_api` (the console) — the largest module.
 - **M6:** the browser viewer (peer protocol via `hbb_common`).

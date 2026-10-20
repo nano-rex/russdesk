@@ -6,6 +6,7 @@
 //! later milestones; see MIGRATION.md.
 
 mod app;
+mod auth;
 mod authz;
 mod config;
 mod db;
