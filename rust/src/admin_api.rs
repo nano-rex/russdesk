@@ -14,6 +14,7 @@ const COOKIE: &str = "russdesk_session";
 
 pub fn register(r: &mut Router<App>) {
     r.add("POST", "/api/admin/login", login);
+    r.add("POST", "/api/admin/login/verify", login_verify);
     r.add("POST", "/api/admin/logout", logout);
     r.add("GET", "/api/admin/me", me);
     r.add("GET", "/api/admin/dashboard", dashboard);
@@ -89,6 +90,20 @@ fn login(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
             200,
         ));
     }
+    start_session(app, req, &user)
+}
+
+fn login_verify(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
+    let body = req.json_object()?;
+    let user = auth::finish_challenge(
+        &app.db,
+        body.get("secret").and_then(Value::as_str).unwrap_or(""),
+        body.get("code")
+            .and_then(Value::as_str)
+            .or_else(|| body.get("verificationCode").and_then(Value::as_str))
+            .unwrap_or(""),
+    )
+    .map_err(|e| HttpError::new(401, e.0))?;
     start_session(app, req, &user)
 }
 
