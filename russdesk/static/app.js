@@ -274,6 +274,7 @@ const ROUTES = {
 };
 
 let mainEl, sideEl, titleEl, actionsEl, refreshTimer;
+let navSeq = 0;
 
 function renderShell() {
   clear(root).className = "";
@@ -319,15 +320,21 @@ async function route() {
     return;
   }
   const page = ROUTES[parts[0]] || pageDashboard;
+  navSeq += 1;
+  // Pages render into a fresh container; a late reload from a page the user
+  // already left then draws into a detached element and is never shown.
+  const fresh = h("div", {});
+  mainEl.replaceWith(fresh);
+  mainEl = fresh;
   for (const a of sideEl.querySelectorAll("a.nav")) {
     a.classList.toggle("active", hash.startsWith(a.dataset.match));
   }
   clear(mainEl).append(muted("Loading…"));
   try {
-    await page(parts.slice(1));
+    await page(parts.slice(1), fresh);
   } catch (err) {
     fail(err);
-    clear(mainEl).append(h("div", { class: "panel" }, err.message));
+    clear(fresh).append(h("div", { class: "panel" }, err.message));
   }
 }
 
@@ -440,7 +447,7 @@ document.addEventListener("DOMContentLoaded", start);
 
 // -- dashboard ---------------------------------------------------------------------
 
-async function pageDashboard() {
+async function pageDashboard(_params, mainEl) {
   setPage("Dashboard");
   const draw = async () => {
     const [d, cfg] = await Promise.all([api("GET", "/dashboard"), api("GET", "/client-config")]);
@@ -516,7 +523,7 @@ async function disconnectLog(logId, after) {
 
 // -- devices -----------------------------------------------------------------------
 
-async function pageDevices(params) {
+async function pageDevices(params, mainEl) {
   const state = { q: "", status: "", group: "", user_group: "", user: "", strategy: "", offline_days: "", page: 1 };
   const selected = new Set();
   const listEl = h("div", {});
@@ -687,7 +694,7 @@ function tfaBadge(u) {
   return u.email_verification ? badge("Email code", "accent") : muted("Off");
 }
 
-async function pageUsers() {
+async function pageUsers(_params, mainEl) {
   setPage("Users",
     ME.smtp_ready && can("users.invite") ? h("button", { onclick: () => inviteDialog(load) }, "Invite") : null,
     can("users.create") ? h("button", { class: "primary", onclick: () => userDialog(null, load) }, "New user") : null);
@@ -816,7 +823,7 @@ async function assignDevicesDialog(u, reload) {
 
 // -- groups ------------------------------------------------------------------------
 
-async function pageGroups(params) {
+async function pageGroups(params, mainEl) {
   const kind = params[0] === "devices" ? "devices" : "users";
   const canUG = can("user_groups.view"), canDG = can("device_groups.view");
   const active = kind === "devices" || !canUG ? "devices" : "users";
@@ -938,7 +945,7 @@ async function pageGroups(params) {
 
 // -- strategies --------------------------------------------------------------------
 
-async function pageStrategies() {
+async function pageStrategies(_params, mainEl) {
   const editable = can("strategies.edit");
   setPage("Strategies", editable ? h("button", { class: "primary", onclick: () => editor(null) }, "New strategy") : null);
   let data;
@@ -1043,8 +1050,8 @@ async function pageStrategies() {
 const RULES = [[1, "Read-only"], [2, "Read/Write"], [3, "Full Control"]];
 const ruleName = (r) => (RULES.find((x) => x[0] === r) || [0, "None"])[1];
 
-async function pageAddressBooks(params) {
-  if (params[0]) return pageAddressBook(params[0], params[1]);
+async function pageAddressBooks(params, mainEl) {
+  if (params[0]) return pageAddressBook(params[0], params[1], mainEl);
   setPage("Address Books", h("button", { class: "primary", onclick: create }, "New shared address book"));
   const data = await api("GET", "/address-books");
   const personal = data.items.filter((b) => b.personal);
@@ -1082,11 +1089,12 @@ async function pageAddressBooks(params) {
   }
 }
 
-async function pageAddressBook(guid, view) {
+async function pageAddressBook(guid, view, mainEl) {
   const b = await api("GET", "/address-books/" + guid);
+  if (!mainEl.isConnected) return;  // the user navigated away meanwhile
   const canWrite = b.rule >= 2;
   const full = b.rule >= 3;
-  const reload = () => pageAddressBook(guid, view).catch(fail);
+  const reload = () => pageAddressBook(guid, view, mainEl).catch(fail);
   const tagColor = Object.fromEntries(b.tags.map((t) => [t.name, t.color]));
   setPage(b.name,
     h("a", { class: "btn", href: "#/address-books" }, "‹ All books"),
@@ -1269,7 +1277,7 @@ async function pageAddressBook(guid, view) {
 
 // -- admin roles -------------------------------------------------------------------
 
-async function pageAdminRoles() {
+async function pageAdminRoles(_params, mainEl) {
   setPage("Admin Roles", h("button", { class: "primary", onclick: () => roleDialog(null) }, "New role"));
   let data;
   const TYPES = [["global", "Global: all users and devices"], ["group", "Group scoped: selected groups"], ["individual", "Individual: the user's own devices and logs"]];
@@ -1329,7 +1337,7 @@ function sideCell(id, name, extra) {
   return h("span", {}, extra ? h("strong", {}, extra + " ") : null, h("span", { class: "mono" }, id || "—"), name ? h("div", { class: "muted" }, name) : null);
 }
 
-async function pageLogs(params) {
+async function pageLogs(params, mainEl) {
   const kind = LOG_KINDS.find((k) => k[0] === params[0]) ? params[0] : "connections";
   const state = { page: 1 };
   const listEl = h("div", {});
@@ -1412,7 +1420,7 @@ async function pageLogs(params) {
 
 // -- recordings --------------------------------------------------------------------
 
-async function pageRecordings() {
+async function pageRecordings(_params, mainEl) {
   setPage("Recordings");
   const [data, settings] = await Promise.all([api("GET", "/recordings"), api("GET", "/settings")]);
   const notice = settings.accept_recordings
@@ -1425,18 +1433,18 @@ async function pageRecordings() {
     { label: "Status", render: (r) => r.completed_at ? badge("complete", "ok") : badge("in progress", "warn") },
     { label: "", cls: "actions", render: (r) => h("span", { class: "split" },
       h("a", { class: "btn", href: `/api/admin/recordings/${r.id}/download` }, "Download"),
-      h("button", { class: "small danger", onclick: () => confirmDialog("Delete recording", `Delete ${r.filename}?`, "Delete", async () => { await api("DELETE", "/recordings/" + r.id); pageRecordings(); }) }, "Delete")) },
+      h("button", { class: "small danger", onclick: () => confirmDialog("Delete recording", `Delete ${r.filename}?`, "Delete", async () => { await api("DELETE", "/recordings/" + r.id); pageRecordings(null, mainEl); }) }, "Delete")) },
   ], data.items, { empty: "No recordings." }));
 }
 
 // -- settings ----------------------------------------------------------------------
 
-async function pageSettings(params) {
+async function pageSettings(params, mainEl) {
   const sub = ["general", "smtp", "tokens", "others"].includes(params[0]) ? params[0] : "general";
   setPage("Settings");
   const header = tabs([["#/settings/general", "General"], ["#/settings/smtp", "SMTP"], ["#/settings/tokens", "Tokens"], ["#/settings/others", "Others"]], "#/settings/" + sub);
   const s = await api("GET", "/settings");
-  const save = async (body) => { try { await api("PATCH", "/settings", body); toast("Settings saved"); pageSettings(params); } catch (e) { fail(e); } };
+  const save = async (body) => { try { await api("PATCH", "/settings", body); toast("Settings saved"); pageSettings(params, mainEl); } catch (e) { fail(e); } };
   const text = (k, ph, attrs) => h("input", Object.assign({ value: s[k], placeholder: ph || "" }, attrs || {}));
   const num = (k) => h("input", { type: "number", min: 0, value: s[k] });
 
@@ -1513,7 +1521,7 @@ async function pageSettings(params) {
           const perms = Object.fromEntries(Object.entries(levels).map(([k, el]) => [k, parseInt(el.value, 10)]));
           const res = await api("POST", "/tokens", { name: name.value, perms, expires_days: expiry.value ? parseInt(expiry.value, 10) : null });
           modal({ title: "Token created", body: h("div", {}, h("p", {}, "Copy it now; it is not shown again."), h("div", { class: "copy-box" }, h("code", {}, res.token), copyButton(() => res.token))) });
-          pageSettings(params);
+          pageSettings(params, mainEl);
         } }] });
     };
     append(clear(mainEl), header, h("div", { class: "toolbar" }, h("div", { class: "grow" }), h("button", { class: "primary", onclick: create }, "Create token")),
@@ -1523,7 +1531,7 @@ async function pageSettings(params) {
         { label: "Created by", key: "creator" },
         { label: "Expires", render: (t) => t.expires_at ? dt(t.expires_at) : "Never" },
         { label: "Last used", render: (t) => ago(t.last_used_at) },
-        { label: "", cls: "actions", render: (t) => h("button", { class: "small danger", onclick: () => confirmDialog("Delete token", `Delete ${t.name}? Scripts using it stop working.`, "Delete", async () => { await api("DELETE", "/tokens/" + t.id); pageSettings(params); }) }, "Delete") },
+        { label: "", cls: "actions", render: (t) => h("button", { class: "small danger", onclick: () => confirmDialog("Delete token", `Delete ${t.name}? Scripts using it stop working.`, "Delete", async () => { await api("DELETE", "/tokens/" + t.id); pageSettings(params, mainEl); }) }, "Delete") },
       ], data.items, { empty: "No API tokens." }));
     return;
   }
@@ -1558,7 +1566,7 @@ async function pageSettings(params) {
 
 // -- account -----------------------------------------------------------------------
 
-async function pageAccount() {
+async function pageAccount(_params, mainEl) {
   setPage("Account");
   ME = await api("GET", "/me");
   const display = h("input", { value: ME.display_name });
@@ -1599,10 +1607,10 @@ async function pageAccount() {
       h("p", {}, ME.totp_expired ? badge("Expired", "warn") : badge("Enabled", "ok"), " Logins from the console and the RustDesk client ask for a code from your authenticator app.",
         ME.totp_expired ? " It still works, but was set up more than 180 days ago; turn it off and on again to renew the secret." : ""),
       h("p", { class: "muted" }, `${ME.backup_codes_left} backup code${ME.backup_codes_left === 1 ? "" : "s"} left.`),
-      h("div", { class: "split" }, regen, h("button", { onclick: async () => { try { showCodes((await api("POST", "/account/2fa/backup-codes", { code: regen.value })).backup_codes); pageAccount(); } catch (e) { fail(e); } } }, "New backup codes")),
+      h("div", { class: "split" }, regen, h("button", { onclick: async () => { try { showCodes((await api("POST", "/account/2fa/backup-codes", { code: regen.value })).backup_codes); pageAccount(null, mainEl); } catch (e) { fail(e); } } }, "New backup codes")),
       h("hr", {}),
       h("div", { class: "form" }, field("Password, to turn it off", pw),
-        h("div", {}, h("button", { class: "danger", onclick: async () => { try { await api("POST", "/account/2fa/disable", { password: pw.value }); toast("Two-factor authentication turned off"); pageAccount(); } catch (e) { fail(e); } } }, "Turn off"))));
+        h("div", {}, h("button", { class: "danger", onclick: async () => { try { await api("POST", "/account/2fa/disable", { password: pw.value }); toast("Two-factor authentication turned off"); pageAccount(null, mainEl); } catch (e) { fail(e); } } }, "Turn off"))));
   } else {
     append(tfaPanel, h("p", { class: "muted" }, "Ask for a code from an authenticator app (Aegis, Google or Microsoft Authenticator, Authy, 1Password…) at each login, in the console and in the RustDesk client."),
       h("button", {
@@ -1616,7 +1624,7 @@ async function pageAccount() {
             actions: [{ label: "Cancel" }, { label: "Enable", primary: true, onClick: async () => {
               const res = await api("POST", "/account/2fa/enable", { secret: setup.secret, code: c.value });
               toast("Two-factor authentication is on");
-              if (ME.must_setup_2fa) { await start(); } else { pageAccount(); }
+              if (ME.must_setup_2fa) { await start(); } else { pageAccount(null, mainEl); }
               showCodes(res.backup_codes);
             } }],
           });
