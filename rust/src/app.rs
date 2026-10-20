@@ -98,7 +98,8 @@ impl App {
         match self.router.match_route(&req.method, &req.path) {
             Match::Found(handler, params) => {
                 let mut resp = handler(self, req, &params).unwrap_or_else(|e| e.into());
-                resp.headers.push(("Cache-Control".into(), "no-store".into()));
+                resp.headers
+                    .push(("Cache-Control".into(), "no-store".into()));
                 resp
             }
             Match::MethodNotAllowed => error_response(405, "Method not allowed"),
@@ -135,7 +136,10 @@ impl App {
     /// Periodic cleanup (app.py maintenance).
     pub fn maintenance(&self) {
         let db = &self.db;
-        let _ = db.execute("DELETE FROM nonces WHERE created_at < ?1", &[int(now() - 600)]);
+        let _ = db.execute(
+            "DELETE FROM nonces WHERE created_at < ?1",
+            &[int(now() - 600)],
+        );
         let _ = db.execute("DELETE FROM tokens WHERE expires_at < ?1", &[int(now())]);
         let _ = db.execute(
             "DELETE FROM pending_disconnects WHERE created_at < ?1",

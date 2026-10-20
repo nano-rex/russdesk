@@ -37,7 +37,7 @@ everything else is implemented and reviewable in-tree:
 | `app.py` | 150 | `src/app.rs` | ✅ ported (routing, bootstrap, static, maintenance) |
 | `__main__.py` | 55 | `src/main.rs` | ✅ ported |
 | `client_api.py` | 976 | `src/client_api.rs` | ✅ ported (all 33 client/ab/record endpoints) |
-| `rest_api.py` | 725 | `src/rest_api.rs` | ⬜ M4 (stub; registering routes next) |
+| `rest_api.py` | 725 | `src/rest_api.rs` | ✅ ported (token REST management API) |
 | `admin_api.py` | 1913 | — | ⬜ M5 (the console API) |
 | `tools/rdproto.py` | — | — | ⬜ M6 (browser viewer, reusing `hbb_common`) |
 
@@ -50,9 +50,8 @@ everything else is implemented and reviewable in-tree:
 - **M3 (done):** auth — login, rate limiting, login alarms, 2FA challenges.
 - **M3.5 (done):** removed all third-party crates — in-house JSON, crypto,
   encodings, RNG, SQLite FFI and SMTP; the crate now builds with std only.
-- **M4 (in progress):** `client_api` done (login/heartbeat/sysinfo/audit/
-  accessible lists/address books/recordings), verified end to end against the
-  running server; `rest_api` next.
+- **M4 (done):** `client_api` and `rest_api` ported (login/heartbeat/sysinfo/audit/
+  accessible lists/address books/recordings and token REST management endpoints), verified by the Rust test suite.
 - **M5:** `admin_api` (the console) — the largest module.
 - **M6:** the browser viewer (peer protocol via `hbb_common`).
 

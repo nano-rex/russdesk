@@ -349,7 +349,10 @@ mod tests {
 
     #[test]
     fn sha1_vectors() {
-        assert_eq!(hex(&sha1(b"abc")), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            hex(&sha1(b"abc")),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
         assert_eq!(hex(&sha1(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
     }
 
@@ -357,7 +360,10 @@ mod tests {
     fn hmac_vectors() {
         // RFC 2202 / RFC 4231 test 1: key = 0x0b*20, data = "Hi There".
         let key = [0x0bu8; 20];
-        assert_eq!(hex(&hmac_sha1(&key, b"Hi There")), "b617318655057264e28bc0b6fb378c8ef146be00");
+        assert_eq!(
+            hex(&hmac_sha1(&key, b"Hi There")),
+            "b617318655057264e28bc0b6fb378c8ef146be00"
+        );
         assert_eq!(
             hex(&hmac_sha256(&key, b"Hi There")),
             "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"

@@ -1,9 +1,7 @@
 //! RussDesk API server and web console — Rust rewrite.
 //!
-//! Milestone 1: configuration, the HTTP/web layer, SQLite foundation, security
-//! primitives, and a running server (health endpoint + static console shell).
-//! The API routers (client/admin/rest), models and the viewer are ported in
-//! later milestones; see MIGRATION.md.
+//! Rust server entry point. M4 client and token REST APIs are ported; the admin console and
+//! browser viewer remain migration milestones. See MIGRATION.md.
 
 #[macro_use]
 mod json;

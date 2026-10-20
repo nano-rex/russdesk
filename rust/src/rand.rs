@@ -8,9 +8,7 @@ use std::sync::OnceLock;
 
 fn urandom() -> &'static Mutex<File> {
     static F: OnceLock<Mutex<File>> = OnceLock::new();
-    F.get_or_init(|| {
-        Mutex::new(File::open("/dev/urandom").expect("cannot open /dev/urandom"))
-    })
+    F.get_or_init(|| Mutex::new(File::open("/dev/urandom").expect("cannot open /dev/urandom")))
 }
 
 /// Fill `buf` with random bytes, or panic if the OS RNG is unavailable.

@@ -21,8 +21,9 @@ pub const LOGIN_ALARMS: &[i64] = &[3, 4, 5];
 /// Pushed as a device's IP whitelist while it is disabled: no address matches.
 pub const BLOCK_WHITELIST: &str = "255.255.255.255/32";
 
-pub const PEER_TEXT_FIELDS: &[&str] =
-    &["alias", "hash", "password", "username", "hostname", "platform", "note"];
+pub const PEER_TEXT_FIELDS: &[&str] = &[
+    "alias", "hash", "password", "username", "hostname", "platform", "note",
+];
 pub const PEER_EXTRA_FIELDS: &[&str] = &["forceAlwaysRelay", "rdpPort", "rdpUsername"];
 
 pub fn conn_type_name(t: i64) -> &'static str {
@@ -107,7 +108,10 @@ fn type_of(action: &str) -> i64 {
 // -- row field helpers --------------------------------------------------------
 
 pub fn rstr(row: &Row, key: &str) -> String {
-    row.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    row.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 pub fn rint(row: &Row, key: &str) -> i64 {
     row.get(key).and_then(|v| v.as_i64()).unwrap_or(0)
@@ -191,7 +195,12 @@ fn iso(ts: i64) -> String {
     let y = if m <= 2 { y + 1 } else { y };
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        y, m, d, secs / 3600, (secs % 3600) / 60, secs % 60
+        y,
+        m,
+        d,
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
     )
 }
 
@@ -334,7 +343,10 @@ pub fn effective_strategy(db: &Database, device: &Row) -> (Option<Row>, Option<&
     if sid.is_none() {
         if let Some(dg) = ropt_int(device, "device_group_id") {
             let r = db
-                .query_one("SELECT strategy_id FROM device_groups WHERE id = ?1", &[int(dg)])
+                .query_one(
+                    "SELECT strategy_id FROM device_groups WHERE id = ?1",
+                    &[int(dg)],
+                )
                 .ok()
                 .flatten();
             sid = r.as_ref().and_then(|r| ropt_int(r, "strategy_id"));
@@ -416,9 +428,10 @@ pub fn ensure_device(db: &Database, device_id: &str, device_uuid: &str, ip: &str
         .ok()
         .flatten();
     if existing.is_none() && !device_uuid.is_empty() {
-        if let Ok(Some(moved)) =
-            db.query_one("SELECT * FROM devices WHERE uuid = ?1", &[text(device_uuid)])
-        {
+        if let Ok(Some(moved)) = db.query_one(
+            "SELECT * FROM devices WHERE uuid = ?1",
+            &[text(device_uuid)],
+        ) {
             let _ = db.execute(
                 "UPDATE devices SET id = ?1 WHERE id = ?2",
                 &[text(device_id), text(rstr(&moved, "id"))],
@@ -450,10 +463,13 @@ pub fn ensure_device(db: &Database, device_id: &str, device_uuid: &str, ip: &str
 
 fn name_of(db: &Database, table: &str, id: Option<i64>) -> Option<String> {
     let id = id?;
-    db.query_one(&format!("SELECT name FROM {table} WHERE id = ?1"), &[int(id)])
-        .ok()
-        .flatten()
-        .map(|r| rstr(&r, "name"))
+    db.query_one(
+        &format!("SELECT name FROM {table} WHERE id = ?1"),
+        &[int(id)],
+    )
+    .ok()
+    .flatten()
+    .map(|r| rstr(&r, "name"))
 }
 
 /// Console/REST view of a device.
@@ -668,17 +684,26 @@ pub fn peer_payload(db: &Database, row: &Row, personal: bool) -> Value {
             }
         }
     }
-    if let Ok(Some(device)) =
-        db.query_one("SELECT * FROM devices WHERE id = ?1", &[text(rstr(row, "peer_id"))])
-    {
+    if let Ok(Some(device)) = db.query_one(
+        "SELECT * FROM devices WHERE id = ?1",
+        &[text(rstr(row, "peer_id"))],
+    ) {
         data["same_server"] = json!(true);
         let n = rstr(&device, "name_override");
-        let n = if n.is_empty() { rstr(&device, "hostname") } else { n };
+        let n = if n.is_empty() {
+            rstr(&device, "hostname")
+        } else {
+            n
+        };
         if !n.is_empty() {
             data["hostname"] = json!(n);
         }
         let u = rstr(&device, "username_override");
-        let u = if u.is_empty() { rstr(&device, "username") } else { u };
+        let u = if u.is_empty() {
+            rstr(&device, "username")
+        } else {
+            u
+        };
         if !u.is_empty() {
             data["username"] = json!(u);
         }
@@ -789,7 +814,10 @@ pub fn upsert_peer(
                     Value::Str(s) => s.clone(),
                     other => other.to_string(),
                 };
-                map.insert((*key).to_string(), json!(s.chars().take(256).collect::<String>()));
+                map.insert(
+                    (*key).to_string(),
+                    json!(s.chars().take(256).collect::<String>()),
+                );
             }
         }
     }
@@ -836,7 +864,10 @@ pub fn rename_tag(db: &Database, guid: &str, old: &str, new: &str) {
         &[text(new), text(guid), text(old)],
     );
     let rows = db
-        .query("SELECT peer_id, tags FROM ab_peers WHERE guid = ?1", &[text(guid)])
+        .query(
+            "SELECT peer_id, tags FROM ab_peers WHERE guid = ?1",
+            &[text(guid)],
+        )
         .unwrap_or_default();
     for r in &rows {
         let tags = loads_or(&rstr(r, "tags"), json!([]));
@@ -844,7 +875,13 @@ pub fn rename_tag(db: &Database, guid: &str, old: &str, new: &str) {
             if arr.iter().any(|t| t.as_str() == Some(old)) {
                 let renamed: Vec<Value> = arr
                     .iter()
-                    .map(|t| if t.as_str() == Some(old) { json!(new) } else { t.clone() })
+                    .map(|t| {
+                        if t.as_str() == Some(old) {
+                            json!(new)
+                        } else {
+                            t.clone()
+                        }
+                    })
                     .collect();
                 let cleaned = clean_tags(&Value::Array(renamed));
                 let _ = db.execute(
@@ -868,14 +905,21 @@ pub fn delete_tags(db: &Database, guid: &str, names: &[String]) {
         );
     }
     let rows = db
-        .query("SELECT peer_id, tags FROM ab_peers WHERE guid = ?1", &[text(guid)])
+        .query(
+            "SELECT peer_id, tags FROM ab_peers WHERE guid = ?1",
+            &[text(guid)],
+        )
         .unwrap_or_default();
     for r in &rows {
         let tags = loads_or(&rstr(r, "tags"), json!([]));
         if let Some(arr) = tags.as_array() {
             let kept: Vec<Value> = arr
                 .iter()
-                .filter(|t| !t.as_str().map(|s| names.iter().any(|n| n == s)).unwrap_or(false))
+                .filter(|t| {
+                    !t.as_str()
+                        .map(|s| names.iter().any(|n| n == s))
+                        .unwrap_or(false)
+                })
                 .cloned()
                 .collect();
             if kept.len() != arr.len() {
@@ -1002,13 +1046,23 @@ mod tests {
             .insert(
                 "INSERT INTO strategies(name, options, modified_at, guid, enabled) \
                  VALUES ('s1', ?1, ?2, ?3, 1)",
-                &[text(r#"{"enable-audio":"N"}"#), int(now()), text(new_guid())],
+                &[
+                    text(r#"{"enable-audio":"N"}"#),
+                    int(now()),
+                    text(new_guid()),
+                ],
             )
             .unwrap();
         db.execute(
             "INSERT INTO devices(id, guid, user_id, strategy_id, os, created_at, last_seen_at) \
              VALUES ('123456789', ?1, ?2, ?3, 'windows / 11', ?4, ?5)",
-            &[text(new_guid()), int(uid), int(sid), int(now()), int(now() - 5)],
+            &[
+                text(new_guid()),
+                int(uid),
+                int(sid),
+                int(now()),
+                int(now() - 5),
+            ],
         )
         .unwrap();
 
@@ -1036,15 +1090,21 @@ mod tests {
         assert_eq!(p["status"], json!(1));
 
         // Disabling the device blocks it: whitelist is pushed, status flips.
-        db.execute("UPDATE devices SET disabled = 1 WHERE id = '123456789'", &[])
-            .unwrap();
+        db.execute(
+            "UPDATE devices SET disabled = 1 WHERE id = '123456789'",
+            &[],
+        )
+        .unwrap();
         let device = db
             .query_one("SELECT * FROM devices WHERE id = '123456789'", &[])
             .unwrap()
             .unwrap();
         assert!(is_blocked(&db, &device));
         let (opts, _) = desired_config(&db, &device);
-        assert_eq!(opts.get("whitelist").map(|s| s.as_str()), Some(BLOCK_WHITELIST));
+        assert_eq!(
+            opts.get("whitelist").map(|s| s.as_str()),
+            Some(BLOCK_WHITELIST)
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

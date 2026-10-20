@@ -21,7 +21,11 @@ pub fn send(s: &Settings, to: &str, subject: &str, body: &str) -> Result<(), Htt
     if !to.contains('@') {
         return Err(HttpError::new(400, "Invalid recipient address"));
     }
-    let port = if s.smtp_port > 0 { s.smtp_port as u16 } else { 587 };
+    let port = if s.smtp_port > 0 {
+        s.smtp_port as u16
+    } else {
+        587
+    };
     let mail = Mail {
         host: &s.smtp_host,
         port,

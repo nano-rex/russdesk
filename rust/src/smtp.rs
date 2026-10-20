@@ -24,9 +24,7 @@ pub struct Mail<'a> {
 pub fn send(mail: &Mail) -> Result<(), String> {
     let addr = format!("{}:{}", mail.host, mail.port);
     let stream = TcpStream::connect(&addr).map_err(|e| format!("connect {addr}: {e}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(20)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(20))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(20))).ok();
     let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(stream);
@@ -39,7 +37,10 @@ pub fn send(mail: &Mail) -> Result<(), String> {
     if !mail.user.is_empty() {
         send_line(&mut writer, "AUTH LOGIN\r\n")?;
         read_reply(&mut reader, 334)?;
-        send_line(&mut writer, &format!("{}\r\n", base64_encode(mail.user.as_bytes())))?;
+        send_line(
+            &mut writer,
+            &format!("{}\r\n", base64_encode(mail.user.as_bytes())),
+        )?;
         read_reply(&mut reader, 334)?;
         send_line(
             &mut writer,

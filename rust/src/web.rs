@@ -28,6 +28,18 @@ impl HttpError {
     }
 }
 
+impl From<String> for HttpError {
+    fn from(message: String) -> Self {
+        HttpError::new(500, message)
+    }
+}
+
+impl From<&str> for HttpError {
+    fn from(message: &str) -> Self {
+        HttpError::new(500, message)
+    }
+}
+
 pub type HttpResult<T> = Result<T, HttpError>;
 
 pub struct Request {
@@ -51,8 +63,8 @@ impl Request {
         if self.body.is_empty() {
             return Ok(Value::Null);
         }
-        let text =
-            std::str::from_utf8(&self.body).map_err(|_| HttpError::new(400, "Invalid JSON body"))?;
+        let text = std::str::from_utf8(&self.body)
+            .map_err(|_| HttpError::new(400, "Invalid JSON body"))?;
         crate::json::from_str(text).map_err(|_| HttpError::new(400, "Invalid JSON body"))
     }
 
@@ -111,7 +123,11 @@ impl Response {
 }
 
 pub fn json_response(value: &Value, status: u16) -> Response {
-    Response::new(crate::json::to_string(value).into_bytes(), status, "application/json")
+    Response::new(
+        crate::json::to_string(value).into_bytes(),
+        status,
+        "application/json",
+    )
 }
 
 pub fn error_response(status: u16, message: &str) -> Response {
@@ -490,10 +506,7 @@ mod tests {
             r.match_route("POST", "/api/users/42"),
             Match::MethodNotAllowed
         ));
-        assert!(matches!(
-            r.match_route("GET", "/api/nope"),
-            Match::NotFound
-        ));
+        assert!(matches!(r.match_route("GET", "/api/nope"), Match::NotFound));
     }
 
     #[test]

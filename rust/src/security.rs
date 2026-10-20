@@ -7,7 +7,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::crypto::{ct_eq, hmac_sha1, scrypt, sha256};
-use crate::encoding::{base32_decode, base32_encode_nopad, base64_decode, base64_encode, base64url_encode_nopad, hex};
+use crate::encoding::{
+    base32_decode, base32_encode_nopad, base64_decode, base64_encode, base64url_encode_nopad, hex,
+};
 use crate::rand;
 
 const SCRYPT_N: usize = 1 << 14; // 16384
@@ -17,7 +19,14 @@ const SCRYPT_LEN: usize = 32;
 
 pub fn hash_password(password: &str) -> String {
     let salt = rand::bytes(16);
-    let digest = scrypt(password.as_bytes(), &salt, SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_LEN);
+    let digest = scrypt(
+        password.as_bytes(),
+        &salt,
+        SCRYPT_N,
+        SCRYPT_R,
+        SCRYPT_P,
+        SCRYPT_LEN,
+    );
     format!(
         "scrypt${}${}${}${}${}",
         SCRYPT_N,
@@ -109,14 +118,19 @@ pub fn verify_totp(secret: &str, code: &str) -> bool {
 
 pub fn totp_uri(secret: &str, account: &str, issuer: &str) -> String {
     let label = urlencode(&format!("{issuer}:{account}"));
-    format!("otpauth://totp/{label}?secret={secret}&issuer={}", urlencode(issuer))
+    format!(
+        "otpauth://totp/{label}?secret={secret}&issuer={}",
+        urlencode(issuer)
+    )
 }
 
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -197,12 +211,19 @@ pub fn new_backup_codes(count: usize) -> (Vec<String>, Vec<String>) {
 }
 
 pub fn match_backup_code(hashes: &[String], code: &str) -> Option<usize> {
-    let mut code: String = code.trim().to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+    let mut code: String = code
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     if code.len() == 8 && !code.contains('-') {
         code = format!("{}-{}", &code[..4], &code[4..]);
     }
     let digest = token_hash(&code);
-    hashes.iter().position(|h| ct_eq(h.as_bytes(), digest.as_bytes()))
+    hashes
+        .iter()
+        .position(|h| ct_eq(h.as_bytes(), digest.as_bytes()))
 }
 
 pub fn new_email_code() -> String {

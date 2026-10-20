@@ -90,8 +90,8 @@ unsafe impl Send for Connection {}
 
 impl Connection {
     pub fn open(path: &Path) -> Result<Connection, String> {
-        let cpath = CString::new(path.to_string_lossy().as_bytes())
-            .map_err(|_| "bad path".to_string())?;
+        let cpath =
+            CString::new(path.to_string_lossy().as_bytes()).map_err(|_| "bad path".to_string())?;
         let mut db: *mut sqlite3 = std::ptr::null_mut();
         let rc = unsafe {
             sqlite3_open_v2(
@@ -127,7 +127,9 @@ impl Connection {
             let msg = if err.is_null() {
                 errmsg(self.db)
             } else {
-                let m = unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned();
+                let m = unsafe { CStr::from_ptr(err) }
+                    .to_string_lossy()
+                    .into_owned();
                 unsafe { sqlite3_free(err as *mut c_void) };
                 m
             };
@@ -318,7 +320,10 @@ mod tests {
         assert_eq!(rows[0].get("score").unwrap().as_f64(), Some(1.5));
         assert!(rows[1].get("score").unwrap().is_null());
         let one = conn
-            .query("SELECT name FROM t WHERE name = ?1", &[SqlValue::Text("bob".into())])
+            .query(
+                "SELECT name FROM t WHERE name = ?1",
+                &[SqlValue::Text("bob".into())],
+            )
             .unwrap();
         assert_eq!(one.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);

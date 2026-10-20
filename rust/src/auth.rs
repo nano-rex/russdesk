@@ -71,7 +71,10 @@ pub fn check_password(
     device_id: &str,
 ) -> Result<Row, LoginError> {
     let username = username.trim();
-    let keys = [format!("ip:{ip}"), format!("user:{}", username.to_lowercase())];
+    let keys = [
+        format!("ip:{ip}"),
+        format!("user:{}", username.to_lowercase()),
+    ];
     if keys.iter().any(|k| login_failures().blocked(k)) {
         return Err(LoginError::new(
             "Too many failed attempts, try again in a few minutes",
@@ -156,7 +159,11 @@ pub fn second_factor(user: &Row) -> Option<&'static str> {
     if !rstr(user, "totp_secret").is_empty() {
         return Some("totp");
     }
-    if user.get("email_verification").and_then(|v| v.as_i64()).unwrap_or(0) != 0
+    if user
+        .get("email_verification")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+        != 0
         && !rstr(user, "email").is_empty()
     {
         return Some("email");
@@ -170,7 +177,11 @@ pub fn needs_2fa_setup(user: &Row) -> bool {
 }
 
 /// Create a pending second-factor check; email the code if needed.
-pub fn start_challenge(db: &Database, user: &Row, method: &str) -> Result<String, crate::web::HttpError> {
+pub fn start_challenge(
+    db: &Database,
+    user: &Row,
+    method: &str,
+) -> Result<String, crate::web::HttpError> {
     let mut code_hash = String::new();
     if method == "email" {
         let code = new_email_code();
@@ -268,9 +279,10 @@ pub fn verify_code(db: &Database, user: &Row, code: &str) -> bool {
 /// Parse a JSON array of strings (the stored backup-code hashes).
 fn string_array(s: &str) -> Vec<String> {
     match crate::json::from_str(s) {
-        Ok(crate::json::Value::Array(a)) => {
-            a.iter().filter_map(|v| v.as_str().map(|x| x.to_string())).collect()
-        }
+        Ok(crate::json::Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(|x| x.to_string()))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -367,7 +379,12 @@ mod tests {
         let uid = add_user(&db, "carol", "secret123", 1);
         db.execute(
             "UPDATE users SET totp_secret = 'JBSWY3DPEHPK3PXP', totp_backup = ?1 WHERE id = ?2",
-            &[text(crate::json::to_string(&crate::json::Value::from(hashes.clone()))), int(uid)],
+            &[
+                text(crate::json::to_string(&crate::json::Value::from(
+                    hashes.clone(),
+                ))),
+                int(uid),
+            ],
         )
         .unwrap();
         let user = db

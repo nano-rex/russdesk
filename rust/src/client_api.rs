@@ -7,9 +7,7 @@ use crate::json::{Object, Value};
 use crate::app::App;
 use crate::authz::Actor;
 use crate::db::{int, now, opt_int, text, Database, Row};
-use crate::models::{
-    self, ropt_int, rstr, RULE_FULL, RULE_READ, RULE_READ_WRITE,
-};
+use crate::models::{self, ropt_int, rstr, RULE_FULL, RULE_READ, RULE_READ_WRITE};
 use crate::security::{new_token, token_hash};
 use crate::web::{json_response, HttpError, HttpResult, Params, Request, Response, Router};
 use crate::{auth, mail};
@@ -34,7 +32,11 @@ pub fn register(r: &mut Router<App>) {
     r.add("POST", "/api/audit/alarm", audit_alarm);
     r.add("GET", "/api/users", users);
     r.add("GET", "/api/peers", peers);
-    r.add("GET", "/api/device-group/accessible", device_groups_accessible);
+    r.add(
+        "GET",
+        "/api/device-group/accessible",
+        device_groups_accessible,
+    );
     r.add("POST", "/api/ab/settings", |a, req, _p| {
         bearer_actor(a, req)?;
         Ok(json_response(
@@ -91,7 +93,7 @@ fn jint(m: &Object, k: &str) -> Option<i64> {
     }
 }
 
-fn page_args(req: &Request) -> HttpResult<(i64, i64)> {
+pub fn page_args(req: &Request) -> HttpResult<(i64, i64)> {
     let current = req
         .query
         .get("current")
@@ -148,7 +150,7 @@ fn actor_from_user(u: &Row) -> Actor {
     }
 }
 
-fn actor_from_token(token: &Row, creator: Option<&Row>) -> Actor {
+pub fn actor_from_token(token: &Row, creator: Option<&Row>) -> Actor {
     Actor {
         user_id: creator.and_then(|u| ropt_int(u, "id")),
         group_id: creator.and_then(|u| ropt_int(u, "group_id")),
@@ -161,7 +163,9 @@ fn actor_from_token(token: &Row, creator: Option<&Row>) -> Actor {
 
 /// The user behind a client login token.
 pub fn client_user(app: &App, req: &Request) -> HttpResult<Row> {
-    let token = req.bearer().ok_or_else(|| HttpError::new(401, "Not logged in"))?;
+    let token = req
+        .bearer()
+        .ok_or_else(|| HttpError::new(401, "Not logged in"))?;
     let db = &app.db;
     let row = db
         .query_one(
@@ -178,14 +182,18 @@ pub fn client_user(app: &App, req: &Request) -> HttpResult<Row> {
     if now() - models::rint(&row, "last_seen_at") > 60 {
         let _ = db.execute(
             "UPDATE tokens SET last_seen_at = ?1, expires_at = ?2 WHERE token_hash = ?3",
-            &[int(now()), int(client_expiry(db)), text(rstr(&row, "token_hash"))],
+            &[
+                int(now()),
+                int(client_expiry(db)),
+                text(rstr(&row, "token_hash")),
+            ],
         );
     }
     Ok(row)
 }
 
 /// The API token (Settings > Tokens) in the Authorization header, or None.
-fn api_token(app: &App, req: &Request) -> HttpResult<Option<Row>> {
+pub fn api_token(app: &App, req: &Request) -> HttpResult<Option<Row>> {
     let Some(token) = req.bearer() else {
         return Ok(None);
     };
@@ -231,7 +239,7 @@ pub fn bearer_actor(app: &App, req: &Request) -> HttpResult<(Actor, Option<Row>)
     Ok((actor, Some(user)))
 }
 
-fn console_url(app: &App, req: &Request) -> String {
+pub fn console_url(app: &App, req: &Request) -> String {
     let url = app.db.settings().console_url;
     if !url.is_empty() {
         return url.trim_end_matches('/').to_string();
@@ -292,7 +300,11 @@ fn login(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let data = req.json_object()?;
     let kind = {
         let k = jstr(&data, "type");
-        if k.is_empty() { "account".to_string() } else { k }
+        if k.is_empty() {
+            "account".to_string()
+        } else {
+            k
+        }
     };
     if kind == "account" {
         let device_id = jstr(&data, "id");
@@ -334,7 +346,11 @@ fn login(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     } else if kind == "email_code" || kind == "tfa_code" {
         let code = {
             let c = jstr(&data, "tfaCode");
-            if c.is_empty() { jstr(&data, "verificationCode") } else { c }
+            if c.is_empty() {
+                jstr(&data, "verificationCode")
+            } else {
+                c
+            }
         };
         match auth::finish_challenge(&app.db, &jstr(&data, "secret"), &code) {
             Err(e) => Ok(error(&e.0)),
@@ -384,7 +400,13 @@ fn heartbeat(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     };
     let _ = db.execute(
         "UPDATE devices SET last_seen_at = ?1, ip = ?2, conns = ?3, uuid = ?4 WHERE id = ?5",
-        &[int(now()), text(&req.ip), text(&conns_json), text(&uuid_final), text(&device_id)],
+        &[
+            int(now()),
+            text(&req.ip),
+            text(&conns_json),
+            text(&uuid_final),
+            text(&device_id),
+        ],
     );
     if ropt_int(&device, "sysinfo_at").is_none() {
         resp.insert("sysinfo".into(), json!(1));
@@ -435,7 +457,9 @@ fn heartbeat(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
         if let Value::Array(applied) = models::loads_or(&rstr(&device, "applied_keys"), json!([])) {
             for key in applied {
                 if let Some(k) = key.as_str() {
-                    if !config.contains_key(k) { config.insert(k.to_string(), json!("")); }
+                    if !config.contains_key(k) {
+                        config.insert(k.to_string(), json!(""));
+                    }
                 }
             }
         }
@@ -446,7 +470,10 @@ fn heartbeat(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
         let keys: Vec<&String> = options.keys().collect();
         let _ = db.execute(
             "UPDATE devices SET applied_keys = ?1 WHERE id = ?2",
-            &[text(crate::json::to_string(&Value::from(keys))), text(&device_id)],
+            &[
+                text(crate::json::to_string(&Value::from(keys))),
+                text(&device_id),
+            ],
         );
     }
     Ok(json_response(&Value::Object(resp), 200))
@@ -480,7 +507,13 @@ fn sysinfo(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
             text(field("cpu", 256)),
             text(field("memory", 256)),
             text(field("version", 32)),
-            text(Value::Object(data.clone()).to_string().chars().take(16384).collect::<String>()),
+            text(
+                Value::Object(data.clone())
+                    .to_string()
+                    .chars()
+                    .take(16384)
+                    .collect::<String>(),
+            ),
             text(&req.ip),
             text(&uuid_final),
             int(now()),
@@ -508,7 +541,7 @@ fn sysinfo(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
 }
 
 /// Assign a device to a user, group, strategy and address book by name.
-fn apply_assignments(
+pub fn apply_assignments(
     db: &Database,
     device: &Row,
     values: &Object,
@@ -534,7 +567,10 @@ fn apply_assignments(
             continue;
         }
         let row = db
-            .query_one(&format!("SELECT id FROM {table} WHERE name = ?1"), &[text(&name)])
+            .query_one(
+                &format!("SELECT id FROM {table} WHERE name = ?1"),
+                &[text(&name)],
+            )
             .ok()
             .flatten();
         match row {
@@ -560,7 +596,10 @@ fn apply_assignments(
             if !(keep_existing && !rstr(device, column).is_empty()) {
                 let _ = db.execute(
                     &format!("UPDATE devices SET {column} = ?1 WHERE id = ?2"),
-                    &[text(value.chars().take(1024).collect::<String>()), text(&device_id)],
+                    &[
+                        text(value.chars().take(1024).collect::<String>()),
+                        text(&device_id),
+                    ],
                 );
             }
         }
@@ -734,9 +773,14 @@ fn audit_conn(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
                  two_factor=?5, authorized_at=?6, controller=?7, \
                  session_id = COALESCE(NULLIF(?8, ''), session_id) WHERE id = ?9",
                 &[
-                    text(&peer_id), text(&peer_name), opt_int(jint(&data, "type")),
-                    opt_int(jint(&data, "primary_auth")), opt_int(jint(&data, "two_factor")),
-                    int(now()), text(&controller), text(&session_id),
+                    text(&peer_id),
+                    text(&peer_name),
+                    opt_int(jint(&data, "type")),
+                    opt_int(jint(&data, "primary_auth")),
+                    opt_int(jint(&data, "two_factor")),
+                    int(now()),
+                    text(&controller),
+                    text(&session_id),
                     int(models::rint(row, "id")),
                 ],
             );
@@ -746,10 +790,17 @@ fn audit_conn(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
                  authorized_at, controller, device_id, conn_id, session_id, started_at) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                 &[
-                    text(&peer_id), text(&peer_name), opt_int(jint(&data, "type")),
-                    opt_int(jint(&data, "primary_auth")), opt_int(jint(&data, "two_factor")),
-                    int(now()), text(&controller), text(&device_id), int(conn_id),
-                    text(&session_id), int(now()),
+                    text(&peer_id),
+                    text(&peer_name),
+                    opt_int(jint(&data, "type")),
+                    opt_int(jint(&data, "primary_auth")),
+                    opt_int(jint(&data, "two_factor")),
+                    int(now()),
+                    text(&controller),
+                    text(&device_id),
+                    int(conn_id),
+                    text(&session_id),
+                    int(now()),
                 ],
             );
         }
@@ -857,7 +908,10 @@ fn users(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let sql = where_.join(" AND ");
     let joins = "FROM users u LEFT JOIN user_groups g ON g.id = u.group_id";
     let total = db
-        .query_one(&format!("SELECT COUNT(*) AS n {joins} WHERE {sql}"), &params)
+        .query_one(
+            &format!("SELECT COUNT(*) AS n {joins} WHERE {sql}"),
+            &params,
+        )
         .ok()
         .flatten()
         .map(|r| models::rint(&r, "n"))
@@ -894,7 +948,10 @@ fn peers(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let scope = models::accessible_scope(db, &user);
     let (cond, mut params) = models::accessible_sql(&scope, "d");
     let total = db
-        .query_one(&format!("SELECT COUNT(*) AS n FROM devices d WHERE {cond}"), &params)
+        .query_one(
+            &format!("SELECT COUNT(*) AS n FROM devices d WHERE {cond}"),
+            &params,
+        )
         .ok()
         .flatten()
         .map(|r| models::rint(&r, "n"))
@@ -916,9 +973,17 @@ fn peers(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
         .iter()
         .map(|r| {
             let name_o = rstr(r, "name_override");
-            let host = if name_o.is_empty() { rstr(r, "hostname") } else { name_o };
+            let host = if name_o.is_empty() {
+                rstr(r, "hostname")
+            } else {
+                name_o
+            };
             let user_o = rstr(r, "username_override");
-            let uname = if user_o.is_empty() { rstr(r, "username") } else { user_o };
+            let uname = if user_o.is_empty() {
+                rstr(r, "username")
+            } else {
+                user_o
+            };
             json!({
                 "id": rstr(r, "id"),
                 "info": { "device_name": host, "os": rstr(r, "os"), "username": uname },
@@ -943,7 +1008,10 @@ fn device_groups_accessible(app: &App, req: &Request, _p: &Params) -> HttpResult
     let scope = models::accessible_scope(db, &user);
     let rows = match &scope {
         None => db
-            .query("SELECT name FROM device_groups ORDER BY name COLLATE NOCASE", &[])
+            .query(
+                "SELECT name FROM device_groups ORDER BY name COLLATE NOCASE",
+                &[],
+            )
             .unwrap_or_default(),
         Some((_, ids)) if !ids.is_empty() => {
             let marks = vec!["?"; ids.len()].join(",");
@@ -1005,12 +1073,7 @@ fn user_row_for(actor: &Actor) -> Row {
 }
 
 /// (actor, book row, personal) after checking the rule meets `need`.
-fn book_access(
-    app: &App,
-    req: &Request,
-    guid: &str,
-    need: i64,
-) -> HttpResult<(Actor, Row, bool)> {
+fn book_access(app: &App, req: &Request, guid: &str, need: i64) -> HttpResult<(Actor, Row, bool)> {
     let (actor, _) = bearer_actor(app, req)?;
     let rule = rule_of(app, &actor, guid);
     if rule < need {
@@ -1036,7 +1099,10 @@ fn action_result(err: Option<String>) -> Response {
 fn ab_personal(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let (actor, _) = bearer_actor(app, req)?;
     let uid = actor.user_id.ok_or_else(|| {
-        HttpError::new(400, "This token has no user, so it has no personal address book")
+        HttpError::new(
+            400,
+            "This token has no user, so it has no personal address book",
+        )
     })?;
     Ok(json_response(
         &json!({ "guid": models::personal_book(&app.db, uid) }),
@@ -1073,9 +1139,16 @@ fn ab_shared_profiles(app: &App, req: &Request, _p: &Params) -> HttpResult<Respo
     let db = &app.db;
     let mut books: Vec<Row> = if actor.token_name.is_some() {
         if actor.ab_level() == 0 {
-            return Err(HttpError::new(403, "The token has no Address Book permission"));
+            return Err(HttpError::new(
+                403,
+                "The token has no Address Book permission",
+            ));
         }
-        let rule = if actor.ab_level() >= 2 { RULE_FULL } else { RULE_READ };
+        let rule = if actor.ab_level() >= 2 {
+            RULE_FULL
+        } else {
+            RULE_READ
+        };
         db.query(
             "SELECT b.*, u.name AS owner FROM address_books b JOIN users u ON u.id = b.owner_id \
              WHERE b.personal = 0 ORDER BY b.name COLLATE NOCASE",
@@ -1120,7 +1193,10 @@ fn ab_peers(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let sql = where_.join(" AND ");
     let total = app
         .db
-        .query_one(&format!("SELECT COUNT(*) AS n FROM ab_peers WHERE {sql}"), &params)
+        .query_one(
+            &format!("SELECT COUNT(*) AS n FROM ab_peers WHERE {sql}"),
+            &params,
+        )
         .ok()
         .flatten()
         .map(|r| models::rint(&r, "n"))
@@ -1130,11 +1206,16 @@ fn ab_peers(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let rows = app
         .db
         .query(
-            &format!("SELECT * FROM ab_peers WHERE {sql} ORDER BY created_at, peer_id LIMIT ? OFFSET ?"),
+            &format!(
+                "SELECT * FROM ab_peers WHERE {sql} ORDER BY created_at, peer_id LIMIT ? OFFSET ?"
+            ),
             &params,
         )
         .unwrap_or_default();
-    let data: Vec<Value> = rows.iter().map(|r| models::peer_payload(&app.db, r, personal)).collect();
+    let data: Vec<Value> = rows
+        .iter()
+        .map(|r| models::peer_payload(&app.db, r, personal))
+        .collect();
     Ok(json_response(&json!({ "total": total, "data": data }), 200))
 }
 
@@ -1143,7 +1224,10 @@ fn ab_tags(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
     book_access(app, req, &guid, RULE_READ)?;
     let rows = app
         .db
-        .query("SELECT name, color FROM ab_tags WHERE guid = ?1 ORDER BY rowid", &[text(&guid)])
+        .query(
+            "SELECT name, color FROM ab_tags WHERE guid = ?1 ORDER BY rowid",
+            &[text(&guid)],
+        )
         .unwrap_or_default();
     let data: Vec<Value> = rows
         .iter()
@@ -1172,21 +1256,27 @@ fn ab_peer_add(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
             return Ok(error("exceed_max_devices"));
         }
     }
-    Ok(action_result(models::upsert_peer(&app.db, &guid, &peer, personal, false)))
+    Ok(action_result(models::upsert_peer(
+        &app.db, &guid, &peer, personal, false,
+    )))
 }
 
 fn ab_peer_update(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
     let guid = p.get("guid").cloned().unwrap_or_default();
     let (_, _, personal) = book_access(app, req, &guid, RULE_READ_WRITE)?;
     let peer = req.json_object()?;
-    Ok(action_result(models::upsert_peer(&app.db, &guid, &peer, personal, true)))
+    Ok(action_result(models::upsert_peer(
+        &app.db, &guid, &peer, personal, true,
+    )))
 }
 
 fn ab_peer_delete(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
     let guid = p.get("guid").cloned().unwrap_or_default();
     book_access(app, req, &guid, RULE_READ_WRITE)?;
     let ids = req.json()?;
-    let ids = ids.as_array().ok_or_else(|| HttpError::new(400, "Expected a list of IDs"))?;
+    let ids = ids
+        .as_array()
+        .ok_or_else(|| HttpError::new(400, "Expected a list of IDs"))?;
     let ids: Vec<String> = ids.iter().map(value_to_string).collect();
     models::recycle_peers(&app.db, &guid, &ids);
     Ok(ok_empty())
@@ -1279,7 +1369,10 @@ fn info_password(data: &Object) -> Option<String> {
 fn ab_shared_add(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let (actor, _) = bearer_actor(app, req)?;
     if actor.token_name.is_some() && actor.ab_level() < 2 {
-        return Err(HttpError::new(403, "The token needs Address Book read/write permission"));
+        return Err(HttpError::new(
+            403,
+            "The token needs Address Book read/write permission",
+        ));
     }
     let uid = actor
         .user_id
@@ -1302,7 +1395,15 @@ fn ab_shared_add(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> 
             int(now()),
         ],
     );
-    models::console_log(&app.db, actor.user_id, &actor.name(), &req.ip, "address_book.create", &name, "");
+    models::console_log(
+        &app.db,
+        actor.user_id,
+        &actor.name(),
+        &req.ip,
+        "address_book.create",
+        &name,
+        "",
+    );
     Ok(json_response(&json!({ "guid": guid }), 200))
 }
 
@@ -1311,21 +1412,38 @@ fn ab_shared_update(app: &App, req: &Request, _p: &Params) -> HttpResult<Respons
     let guid = jstr(&data, "guid");
     let (actor, _, personal) = book_access(app, req, &guid, RULE_FULL)?;
     if personal {
-        return Err(HttpError::new(400, "A personal address book cannot be changed here"));
+        return Err(HttpError::new(
+            400,
+            "A personal address book cannot be changed here",
+        ));
     }
     let db = &app.db;
     let name = jstr(&data, "name");
     if !name.trim().is_empty() {
         let _ = db.execute(
             "UPDATE address_books SET name = ?1 WHERE guid = ?2",
-            &[text(name.trim().chars().take(64).collect::<String>()), text(&guid)],
+            &[
+                text(name.trim().chars().take(64).collect::<String>()),
+                text(&guid),
+            ],
         );
-        models::console_log(db, actor.user_id, &actor.name(), &req.ip, "address_book.rename", &name, "");
+        models::console_log(
+            db,
+            actor.user_id,
+            &actor.name(),
+            &req.ip,
+            "address_book.rename",
+            &name,
+            "",
+        );
     }
     if data.contains_key("note") {
         let _ = db.execute(
             "UPDATE address_books SET note = ?1 WHERE guid = ?2",
-            &[text(jstr(&data, "note").chars().take(1024).collect::<String>()), text(&guid)],
+            &[
+                text(jstr(&data, "note").chars().take(1024).collect::<String>()),
+                text(&guid),
+            ],
         );
     }
     if let Some(pw) = info_password(&data) {
@@ -1358,7 +1476,9 @@ fn ab_shared_delete(app: &App, req: &Request, _p: &Params) -> HttpResult<Respons
         let guid = value_to_string(g);
         let (actor, book, personal) = book_access(app, req, &guid, RULE_FULL)?;
         if !personal {
-            let _ = app.db.execute("DELETE FROM address_books WHERE guid = ?1", &[text(&guid)]);
+            let _ = app
+                .db
+                .execute("DELETE FROM address_books WHERE guid = ?1", &[text(&guid)]);
             models::console_log(
                 &app.db,
                 actor.user_id,
@@ -1392,11 +1512,19 @@ fn ab_rules(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let (current, size) = page_args(req)?;
     let rows = app
         .db
-        .query(&format!("{RULES_SQL} WHERE r.guid = ?1 ORDER BY r.id"), &[text(&guid)])
+        .query(
+            &format!("{RULES_SQL} WHERE r.guid = ?1 ORDER BY r.id"),
+            &[text(&guid)],
+        )
         .unwrap_or_default();
     let total = rows.len() as i64;
     let start = ((current - 1) * size).max(0) as usize;
-    let data: Vec<Value> = rows.iter().skip(start).take(size as usize).map(rule_payload).collect();
+    let data: Vec<Value> = rows
+        .iter()
+        .skip(start)
+        .take(size as usize)
+        .map(rule_payload)
+        .collect();
     Ok(json_response(&json!({ "total": total, "data": data }), 200))
 }
 
@@ -1412,10 +1540,16 @@ fn check_share_target(
     }
     let own = actor.group_id;
     if everyone {
-        return Err(HttpError::new(403, "Only administrators can share an address book with everyone"));
+        return Err(HttpError::new(
+            403,
+            "Only administrators can share an address book with everyone",
+        ));
     }
     if group_id.is_some() && group_id != own {
-        return Err(HttpError::new(403, "You can only share with your own group"));
+        return Err(HttpError::new(
+            403,
+            "You can only share with your own group",
+        ));
     }
     if let Some(uid) = user_id {
         let row = app
@@ -1423,9 +1557,15 @@ fn check_share_target(
             .query_one("SELECT group_id FROM users WHERE id = ?1", &[int(uid)])
             .ok()
             .flatten();
-        let ok = row.as_ref().map(|r| ropt_int(r, "group_id") == own).unwrap_or(false);
+        let ok = row
+            .as_ref()
+            .map(|r| ropt_int(r, "group_id") == own)
+            .unwrap_or(false);
         if !ok {
-            return Err(HttpError::new(403, "You can only share with users in your own group"));
+            return Err(HttpError::new(
+                403,
+                "You can only share with users in your own group",
+            ));
         }
     }
     Ok(())
@@ -1436,7 +1576,10 @@ fn ab_rule_add(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let guid = jstr(&data, "guid");
     let (actor, _, personal) = book_access(app, req, &guid, RULE_FULL)?;
     if personal {
-        return Err(HttpError::new(400, "A personal address book cannot be shared"));
+        return Err(HttpError::new(
+            400,
+            "A personal address book cannot be shared",
+        ));
     }
     let rule = jint(&data, "rule").unwrap_or(0);
     if !(1..=3).contains(&rule) {
@@ -1447,14 +1590,20 @@ fn ab_rule_add(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let mut group_id = None;
     if !jstr(&data, "user").is_empty() {
         let row = db
-            .query_one("SELECT id FROM users WHERE name = ?1", &[text(jstr(&data, "user"))])
+            .query_one(
+                "SELECT id FROM users WHERE name = ?1",
+                &[text(jstr(&data, "user"))],
+            )
             .ok()
             .flatten()
             .ok_or_else(|| HttpError::new(400, "User not found"))?;
         user_id = Some(models::rint(&row, "id"));
     } else if !jstr(&data, "group").is_empty() {
         let row = db
-            .query_one("SELECT id FROM user_groups WHERE name = ?1", &[text(jstr(&data, "group"))])
+            .query_one(
+                "SELECT id FROM user_groups WHERE name = ?1",
+                &[text(jstr(&data, "group"))],
+            )
             .ok()
             .flatten()
             .ok_or_else(|| HttpError::new(400, "Group not found"))?;
@@ -1495,7 +1644,10 @@ fn ab_rule_update(app: &App, req: &Request, _p: &Params) -> HttpResult<Response>
     let data = req.json_object()?;
     let row = app
         .db
-        .query_one("SELECT * FROM ab_rules WHERE rule_guid = ?1", &[text(jstr(&data, "guid"))])
+        .query_one(
+            "SELECT * FROM ab_rules WHERE rule_guid = ?1",
+            &[text(jstr(&data, "guid"))],
+        )
         .ok()
         .flatten()
         .ok_or_else(|| HttpError::new(404, "Rule not found"))?;
@@ -1529,12 +1681,18 @@ fn ab_rules_delete(app: &App, req: &Request, _p: &Params) -> HttpResult<Response
         let rule_guid = value_to_string(rg);
         let row = app
             .db
-            .query_one("SELECT * FROM ab_rules WHERE rule_guid = ?1", &[text(&rule_guid)])
+            .query_one(
+                "SELECT * FROM ab_rules WHERE rule_guid = ?1",
+                &[text(&rule_guid)],
+            )
             .ok()
             .flatten();
         let Some(row) = row else { continue };
         let (actor, _, _) = book_access(app, req, &rstr(&row, "guid"), RULE_FULL)?;
-        let _ = app.db.execute("DELETE FROM ab_rules WHERE id = ?1", &[int(models::rint(&row, "id"))]);
+        let _ = app.db.execute(
+            "DELETE FROM ab_rules WHERE id = ?1",
+            &[int(models::rint(&row, "id"))],
+        );
         models::console_log(
             &app.db,
             actor.user_id,
@@ -1553,7 +1711,10 @@ fn ab_legacy_get(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> 
     let guid = models::personal_book(&app.db, models::rint(&user, "id"));
     let tags = app
         .db
-        .query("SELECT name, color FROM ab_tags WHERE guid = ?1 ORDER BY rowid", &[text(&guid)])
+        .query(
+            "SELECT name, color FROM ab_tags WHERE guid = ?1 ORDER BY rowid",
+            &[text(&guid)],
+        )
         .unwrap_or_default();
     let peer_rows = app
         .db
@@ -1603,7 +1764,9 @@ fn ab_legacy_post(app: &App, req: &Request, _p: &Params) -> HttpResult<Response>
         Some(Value::Str(s)) => models::loads_or(s, json!({})),
         _ => json!({}),
     };
-    let _ = app.db.execute("DELETE FROM ab_tags WHERE guid = ?1", &[text(&guid)]);
+    let _ = app
+        .db
+        .execute("DELETE FROM ab_tags WHERE guid = ?1", &[text(&guid)]);
     for name in models::clean_tags(data.get("tags").unwrap_or(&Value::Null)) {
         let color = colors.get(&name).and_then(|v| v.as_i64()).unwrap_or(0);
         let _ = app.db.execute(
@@ -1611,7 +1774,9 @@ fn ab_legacy_post(app: &App, req: &Request, _p: &Params) -> HttpResult<Response>
             &[text(&guid), text(&name), int(color)],
         );
     }
-    let _ = app.db.execute("DELETE FROM ab_peers WHERE guid = ?1", &[text(&guid)]);
+    let _ = app
+        .db
+        .execute("DELETE FROM ab_peers WHERE guid = ?1", &[text(&guid)]);
     if let Some(peers_arr) = data.get("peers").and_then(|v| v.as_array()) {
         for peer in peers_arr {
             if let Value::Object(m) = peer {
@@ -1646,7 +1811,10 @@ fn valid_recording_name(name: &str) -> bool {
 fn record(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let settings = app.db.settings();
     if !settings.accept_recordings {
-        return Err(HttpError::new(403, "Recording upload is disabled on this server"));
+        return Err(HttpError::new(
+            403,
+            "Recording upload is disabled on this server",
+        ));
     }
     let kind = req.query.get("type").cloned().unwrap_or_default();
     let name = req.query.get("file").cloned().unwrap_or_default();
@@ -1681,7 +1849,10 @@ fn record(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     }
 
     let row = db
-        .query_one("SELECT * FROM recordings WHERE filename = ?1", &[text(&name)])
+        .query_one(
+            "SELECT * FROM recordings WHERE filename = ?1",
+            &[text(&name)],
+        )
         .ok()
         .flatten();
     let row = match row {
@@ -1690,7 +1861,10 @@ fn record(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     };
     if kind == "remove" {
         let _ = std::fs::remove_file(&path);
-        let _ = db.execute("DELETE FROM recordings WHERE id = ?1", &[int(models::rint(&row, "id"))]);
+        let _ = db.execute(
+            "DELETE FROM recordings WHERE id = ?1",
+            &[int(models::rint(&row, "id"))],
+        );
         return Ok(json_response(&json!({}), 200));
     }
     if kind != "part" && kind != "tail" {
@@ -1716,13 +1890,20 @@ fn record(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
         .open(&path)
         .map_err(|_| HttpError::new(500, "cannot open file"))?;
     f.seek(SeekFrom::Start(offset as u64)).ok();
-    f.write_all(&req.body).map_err(|_| HttpError::new(500, "write failed"))?;
-    let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+    f.write_all(&req.body)
+        .map_err(|_| HttpError::new(500, "write failed"))?;
+    let size = std::fs::metadata(&path)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
     let _ = db.execute(
         "UPDATE recordings SET size = ?1, completed_at = ?2 WHERE id = ?3",
         &[
             int(size),
-            if kind == "tail" { int(now()) } else { crate::db::SqlValue::Null },
+            if kind == "tail" {
+                int(now())
+            } else {
+                crate::db::SqlValue::Null
+            },
             int(models::rint(&row, "id")),
         ],
     );

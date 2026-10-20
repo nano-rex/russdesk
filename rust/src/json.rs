@@ -13,7 +13,9 @@ pub struct Object {
 
 impl Object {
     pub fn new() -> Self {
-        Object { entries: Vec::new() }
+        Object {
+            entries: Vec::new(),
+        }
     }
     pub fn insert(&mut self, key: String, value: Value) {
         for e in &mut self.entries {
@@ -28,7 +30,10 @@ impl Object {
         self.entries.iter().find(|e| e.0 == key).map(|e| &e.1)
     }
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
-        self.entries.iter_mut().find(|e| e.0 == key).map(|e| &mut e.1)
+        self.entries
+            .iter_mut()
+            .find(|e| e.0 == key)
+            .map(|e| &mut e.1)
     }
     pub fn contains_key(&self, key: &str) -> bool {
         self.entries.iter().any(|e| e.0 == key)
@@ -422,9 +427,7 @@ impl<'a> Parser<'a> {
                                     if self.peek() == Some(b'u') {
                                         self.pos += 1;
                                         let lo = self.parse_hex4()?;
-                                        let c = 0x10000
-                                            + ((cp - 0xD800) << 10)
-                                            + (lo - 0xDC00);
+                                        let c = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                                         s.push(char::from_u32(c).unwrap_or('\u{fffd}'));
                                     } else {
                                         return Err("bad surrogate".into());
@@ -464,7 +467,8 @@ impl<'a> Parser<'a> {
         if self.pos + 4 > self.bytes.len() {
             return Err("bad \\u".into());
         }
-        let hex = std::str::from_utf8(&self.bytes[self.pos..self.pos + 4]).map_err(|_| "bad \\u")?;
+        let hex =
+            std::str::from_utf8(&self.bytes[self.pos..self.pos + 4]).map_err(|_| "bad \\u")?;
         let v = u32::from_str_radix(hex, 16).map_err(|_| "bad \\u")?;
         self.pos += 4;
         Ok(v)
@@ -506,11 +510,16 @@ impl<'a> Parser<'a> {
         }
         let text = std::str::from_utf8(&self.bytes[start..self.pos]).map_err(|_| "bad number")?;
         if is_float {
-            text.parse::<f64>().map(Value::Float).map_err(|_| "bad number".into())
+            text.parse::<f64>()
+                .map(Value::Float)
+                .map_err(|_| "bad number".into())
         } else {
             match text.parse::<i64>() {
                 Ok(n) => Ok(Value::Int(n)),
-                Err(_) => text.parse::<f64>().map(Value::Float).map_err(|_| "bad number".into()),
+                Err(_) => text
+                    .parse::<f64>()
+                    .map(Value::Float)
+                    .map_err(|_| "bad number".into()),
             }
         }
     }

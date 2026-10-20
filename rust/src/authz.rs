@@ -13,29 +13,97 @@ pub const PERMISSIONS: &[(&str, &str, &[&str])] = &[
     ("users.create", "Users - Create", &["global", "group"]),
     ("users.invite", "Users - Invite", &["global", "group"]),
     ("users.delete", "Users - Delete", &["global", "group"]),
-    ("users.enable_disable", "Users - Enable/Disable", &["global", "group"]),
-    ("users.edit_email", "Users - Edit Email", &["global", "group"]),
-    ("users.edit_password", "Users - Edit Password", &["global", "group"]),
+    (
+        "users.enable_disable",
+        "Users - Enable/Disable",
+        &["global", "group"],
+    ),
+    (
+        "users.edit_email",
+        "Users - Edit Email",
+        &["global", "group"],
+    ),
+    (
+        "users.edit_password",
+        "Users - Edit Password",
+        &["global", "group"],
+    ),
     ("users.edit_note", "Users - Edit Note", &["global", "group"]),
-    ("users.edit_display_name", "Users - Edit Display Name", &["global", "group"]),
-    ("users.manage_2fa", "Users - Manage 2FA", &["global", "group"]),
-    ("users.force_logout", "Users - Force Logout", &["global", "group"]),
+    (
+        "users.edit_display_name",
+        "Users - Edit Display Name",
+        &["global", "group"],
+    ),
+    (
+        "users.manage_2fa",
+        "Users - Manage 2FA",
+        &["global", "group"],
+    ),
+    (
+        "users.force_logout",
+        "Users - Force Logout",
+        &["global", "group"],
+    ),
     ("users.change_group", "Users - Update Group", &["global"]),
-    ("users.change_strategy", "Users - Update Strategy", &["global", "group"]),
-    ("devices.view", "Devices - View", &["global", "individual", "group"]),
-    ("devices.enable_disable", "Devices - Enable/Disable", &["global", "individual", "group"]),
-    ("devices.delete", "Devices - Delete", &["global", "individual", "group"]),
-    ("devices.edit_info", "Devices - Edit Info", &["global", "individual", "group"]),
-    ("devices.assign_to_user", "Devices - Assign to User", &["global"]),
-    ("devices.change_group", "Devices - Update Group", &["global"]),
-    ("devices.change_strategy", "Devices - Update Strategy", &["global", "individual", "group"]),
+    (
+        "users.change_strategy",
+        "Users - Update Strategy",
+        &["global", "group"],
+    ),
+    (
+        "devices.view",
+        "Devices - View",
+        &["global", "individual", "group"],
+    ),
+    (
+        "devices.enable_disable",
+        "Devices - Enable/Disable",
+        &["global", "individual", "group"],
+    ),
+    (
+        "devices.delete",
+        "Devices - Delete",
+        &["global", "individual", "group"],
+    ),
+    (
+        "devices.edit_info",
+        "Devices - Edit Info",
+        &["global", "individual", "group"],
+    ),
+    (
+        "devices.assign_to_user",
+        "Devices - Assign to User",
+        &["global"],
+    ),
+    (
+        "devices.change_group",
+        "Devices - Update Group",
+        &["global"],
+    ),
+    (
+        "devices.change_strategy",
+        "Devices - Update Strategy",
+        &["global", "individual", "group"],
+    ),
     ("user_groups.view", "User Groups - View", &["global"]),
     ("user_groups.edit", "User Groups - Edit", &["global"]),
     ("device_groups.view", "Device Groups - View", &["global"]),
     ("device_groups.edit", "Device Groups - Edit", &["global"]),
-    ("device_groups.change_strategy", "Device Groups - Update Strategy", &["global"]),
-    ("audits.view", "Audit Logs - View", &["global", "individual"]),
-    ("audits.edit", "Audit Logs - Edit (disconnect, notes)", &["global", "individual"]),
+    (
+        "device_groups.change_strategy",
+        "Device Groups - Update Strategy",
+        &["global"],
+    ),
+    (
+        "audits.view",
+        "Audit Logs - View",
+        &["global", "individual"],
+    ),
+    (
+        "audits.edit",
+        "Audit Logs - Edit (disconnect, notes)",
+        &["global", "individual"],
+    ),
     ("strategies.view", "Strategies - View", &["global"]),
     ("strategies.edit", "Strategies - Edit", &["global"]),
 ];
@@ -226,7 +294,9 @@ impl Actor {
                 &[SqlValue::Int(uid)],
             )
             .unwrap_or_default();
-        let field = |r: &crate::db::Row, k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let field = |r: &crate::db::Row, k: &str| {
+            r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string()
+        };
         rows.iter()
             .map(|r| RoleRow {
                 rtype: field(r, "type"),
@@ -352,9 +422,10 @@ fn json_int_set(s: &str) -> BTreeSet<i64> {
 
 fn json_str_set(s: &str) -> BTreeSet<String> {
     match crate::json::from_str(s) {
-        Ok(crate::json::Value::Array(a)) => {
-            a.iter().filter_map(|v| v.as_str().map(|x| x.to_string())).collect()
-        }
+        Ok(crate::json::Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(|x| x.to_string()))
+            .collect(),
         _ => BTreeSet::new(),
     }
 }
@@ -363,20 +434,26 @@ pub fn device_in_scope(db: &Database, scope: &Scope, device_id: &str) -> bool {
     let (cond, params) = scope.device_sql("d");
     let mut args: Vec<SqlValue> = vec![SqlValue::Text(device_id.to_string())];
     args.extend(params.into_iter().map(SqlValue::Int));
-    db.query_one(&format!("SELECT 1 AS n FROM devices d WHERE d.id = ? AND {cond}"), &args)
-        .ok()
-        .flatten()
-        .is_some()
+    db.query_one(
+        &format!("SELECT 1 AS n FROM devices d WHERE d.id = ? AND {cond}"),
+        &args,
+    )
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 pub fn user_in_scope(db: &Database, scope: &Scope, user_id: i64) -> bool {
     let (cond, params) = scope.user_sql("u");
     let mut args: Vec<SqlValue> = vec![SqlValue::Int(user_id)];
     args.extend(params.into_iter().map(SqlValue::Int));
-    db.query_one(&format!("SELECT 1 AS n FROM users u WHERE u.id = ? AND {cond}"), &args)
-        .ok()
-        .flatten()
-        .is_some()
+    db.query_one(
+        &format!("SELECT 1 AS n FROM users u WHERE u.id = ? AND {cond}"),
+        &args,
+    )
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 #[cfg(test)]

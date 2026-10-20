@@ -15,7 +15,10 @@ pub type Row = json::Object;
 
 /// Seconds since the epoch, as stored in every timestamp column.
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 // Parameter constructors.
@@ -348,11 +351,27 @@ impl Default for Settings {
 }
 
 pub const SETTING_KEYS: &[&str] = &[
-    "id_server", "relay_server", "api_server", "server_key", "client_token_days",
-    "console_session_hours", "log_retention_days", "accept_recordings", "recordings_max_mb",
-    "max_peers_per_ab", "default_strategy_id", "only_admin_logs", "allow_non_admin_share",
-    "disable_accessible_devices", "console_url", "smtp_host", "smtp_port", "smtp_security",
-    "smtp_user", "smtp_password", "smtp_from",
+    "id_server",
+    "relay_server",
+    "api_server",
+    "server_key",
+    "client_token_days",
+    "console_session_hours",
+    "log_retention_days",
+    "accept_recordings",
+    "recordings_max_mb",
+    "max_peers_per_ab",
+    "default_strategy_id",
+    "only_admin_logs",
+    "allow_non_admin_share",
+    "disable_accessible_devices",
+    "console_url",
+    "smtp_host",
+    "smtp_port",
+    "smtp_security",
+    "smtp_user",
+    "smtp_password",
+    "smtp_from",
 ];
 
 impl Settings {
@@ -456,14 +475,24 @@ impl Database {
         self.query_one("SELECT value FROM meta WHERE key = ?1", &[text(key)])
             .ok()
             .flatten()
-            .and_then(|r| r.get("value").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .and_then(|r| {
+                r.get("value")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
     }
 
     pub fn settings(&self) -> Settings {
         let mut s = Settings::default();
-        let rows = self.query("SELECT key, value FROM settings", &[]).unwrap_or_default();
+        let rows = self
+            .query("SELECT key, value FROM settings", &[])
+            .unwrap_or_default();
         for row in &rows {
-            let key = row.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let key = row
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let raw = row.get("value").and_then(|v| v.as_str()).unwrap_or("");
             if let Ok(v) = json::from_str(raw) {
                 s.apply(&key, &v);
@@ -561,7 +590,10 @@ mod tests {
     fn core_tables_exist() {
         let (dir, db) = tmp_db();
         let n = db
-            .query("SELECT count(*) AS c FROM sqlite_master WHERE type='table'", &[])
+            .query(
+                "SELECT count(*) AS c FROM sqlite_master WHERE type='table'",
+                &[],
+            )
             .unwrap();
         assert!(n[0].get("c").unwrap().as_i64().unwrap() >= 20);
         let _ = std::fs::remove_dir_all(&dir);
