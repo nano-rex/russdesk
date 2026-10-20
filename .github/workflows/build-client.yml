@@ -1,0 +1,129 @@
+name: Build custom client
+
+# Builds a RustDesk client from client/vendor with your self-hosted ID server,
+# relay server and public key baked in, so the resulting .exe / .apk connects to
+# your server with no manual setup. Toolchain versions mirror RustDesk 1.5.0's
+# own CI (see client/vendor/.github/workflows/flutter-build.yml).
+#
+# Configure once, then run from the Actions tab (workflow_dispatch):
+#   - Repo variable  RENDEZVOUS_SERVER   e.g. rd.example.com:21116   (required)
+#   - Repo secret    RS_PUB_KEY          contents of hbbs' id_ed25519.pub (required)
+#   - Repo variable  RELAY_SERVER        optional, e.g. rd.example.com:21117
+#   - Repo variable  API_SERVER          optional, e.g. https://rd.example.com
+# Any of these can be overridden per-run with the inputs below.
+
+on:
+  workflow_dispatch:
+    inputs:
+      id_server:
+        description: "ID/rendezvous server host:port (overrides the RENDEZVOUS_SERVER variable)"
+        required: false
+      relay_server:
+        description: "Relay server host:port (overrides RELAY_SERVER)"
+        required: false
+      api_server:
+        description: "API server URL (overrides API_SERVER)"
+        required: false
+      targets:
+        description: "What to build"
+        type: choice
+        default: "android+windows"
+        options: ["android+windows", "android", "windows"]
+
+env:
+  RUST_VERSION: "1.75"
+  FLUTTER_VERSION: "3.24.5"
+  NDK_VERSION: "r28c"
+  CARGO_NDK_VERSION: "3.1.2"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  # Resolved config, inputs winning over repo vars/secrets.
+  ID_SERVER: ${{ github.event.inputs.id_server || vars.RENDEZVOUS_SERVER }}
+  RELAY_SERVER: ${{ github.event.inputs.relay_server || vars.RELAY_SERVER }}
+  API_SERVER: ${{ github.event.inputs.api_server || vars.API_SERVER }}
+  RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+
+jobs:
+  android:
+    if: contains(github.event.inputs.targets || 'android+windows', 'android')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bake server config into the client
+        run: |
+          test -n "$ID_SERVER" || { echo "::error::set the RENDEZVOUS_SERVER repo variable or id_server input"; exit 1; }
+          test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret"; exit 1; }
+          python3 client/configure_client.py \
+            --id-server "$ID_SERVER" --key "$RS_PUB_KEY" \
+            --relay "$RELAY_SERVER" --api-server "$API_SERVER"
+
+      - uses: actions/setup-java@v4
+        with: { distribution: "temurin", java-version: "17" }
+
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: ${{ env.FLUTTER_VERSION }} }
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with: { ndk-version: ${{ env.NDK_VERSION }}, add-to-path: true }
+
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: ${{ env.RUST_VERSION }}, targets: "aarch64-linux-android,armv7-linux-androideabi" }
+
+      - name: Build Rust jniLibs + APK
+        working-directory: client/vendor
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          ./flutter/build_android_deps.sh arm64-v8a armeabi-v7a
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/ || true
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/ || true
+          ( cd flutter && flutter pub get && bash build_android.sh )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-android-custom
+          path: client/vendor/flutter/build/app/outputs/flutter-apk/app-*-release.apk
+
+  windows:
+    if: contains(github.event.inputs.targets || 'android+windows', 'windows')
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bake server config into the client
+        shell: bash
+        run: |
+          test -n "$ID_SERVER" || { echo "::error::set the RENDEZVOUS_SERVER repo variable or id_server input"; exit 1; }
+          test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret"; exit 1; }
+          python3 client/configure_client.py \
+            --id-server "$ID_SERVER" --key "$RS_PUB_KEY" \
+            --relay "$RELAY_SERVER" --api-server "$API_SERVER"
+
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: ${{ env.FLUTTER_VERSION }} }
+
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: ${{ env.RUST_VERSION }}, targets: "x86_64-pc-windows-msvc" }
+
+      - uses: lukka/run-vcpkg@v11
+        with: { vcpkgDirectory: "C:/vcpkg", vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }} }
+
+      - name: Install vcpkg dependencies
+        run: vcpkg install --triplet x64-windows-static libvpx libyuv opus aom
+
+      - name: Build Windows client
+        working-directory: client/vendor
+        shell: bash
+        env:
+          VCPKG_ROOT: "C:/vcpkg"
+        run: |
+          flutter pub get
+          python build.py --flutter
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-windows-custom
+          path: client/vendor/build/windows/x64/runner/Release/rustdesk.exe
