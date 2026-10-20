@@ -5,6 +5,7 @@
 
 #[macro_use]
 mod json;
+mod admin_api;
 mod app;
 mod auth;
 mod authz;

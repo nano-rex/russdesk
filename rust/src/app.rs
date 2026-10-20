@@ -9,7 +9,7 @@ use crate::db::{int, now, text, Database};
 use crate::models::{new_guid, personal_book};
 use crate::security::hash_password;
 use crate::web::{error_response, json_response, Match, Request, Response, Router};
-use crate::{client_api, rest_api};
+use crate::{admin_api, client_api, rest_api};
 
 const CSP: &str = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
@@ -32,6 +32,7 @@ impl App {
         });
         client_api::register(&mut router);
         rest_api::register(&mut router);
+        admin_api::register(&mut router);
         let app = App {
             cfg,
             db: Arc::new(db),
