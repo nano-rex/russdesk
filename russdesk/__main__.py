@@ -13,7 +13,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="russdesk", description="RussDesk API server and web console")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--host", help="listen address (RUSSDESK_HOST, default 0.0.0.0)")
-    parser.add_argument("--port", type=int, help="listen port (RUSSDESK_PORT, default 21114)")
+    parser.add_argument("--port", type=int, help="listen port (RUSSDESK_PORT, default 31114)")
     parser.add_argument("--data-dir", help="database and recordings (RUSSDESK_DATA_DIR, default ./data)")
     parser.add_argument("--reset-password", metavar="USER",
                         help="set a new password for USER (read from stdin) and exit")

@@ -46,13 +46,30 @@ iOS can't be controlled remotely (an Apple restriction that applies to RustDesk 
 iOS client never reports itself as a device; it can log in, use address books and connect out,
 and its outgoing sessions appear in the target device's connection log.
 
-Plain `http://<server>:21114` works on phones too: the apps send API requests through their own
+Plain `http://<server>:31114` works on phones too: the apps send API requests through their own
 Rust HTTP stack, so Android's cleartext rule and iOS App Transport Security don't apply.
 
 When RussDesk answers the client's system-info upload the client treats the server as "Pro".
 That changes only two small things in the client: an admin can let a device hide its
 connection window (option `allow-hide-cm`, permanent-password-only mode), and a Windows
 connection-manager error popup is suppressed.
+
+## Ports
+
+RussDesk keeps RustDesk's port layout but moved to 3111X, so it can sit next to an
+existing RustDesk server on the same machine:
+
+| Port | | Service |
+| --- | --- | --- |
+| 31114 | TCP | RussDesk web console and API |
+| 31115 | TCP | hbbs NAT type test |
+| 31116 | TCP + UDP | hbbs ID/rendezvous (what clients enter as *ID server*) |
+| 31117 | TCP | hbbr relay |
+| 31118 | TCP | hbbs WebSocket |
+| 31119 | TCP | hbbr WebSocket |
+
+Clients must therefore include the port in the ID server field (`host:31116`); without it
+they assume RustDesk's default 21116.
 
 ## Install on a bare-metal Linux server
 
@@ -94,34 +111,35 @@ Other options: `--admin-password PW`, `--rustdesk-version 1.1.16` (pin hbbs/hbbr
 `--skip-rustdesk` (hbbs/hbbr already installed; set `RUSSDESK_HBBS_KEY_FILE` in
 `/etc/russdesk.env` to its `id_ed25519.pub`), `--no-firewall`.
 
-If the server sits behind a cloud firewall or router, open TCP 21114–21119 and UDP 21116
-there too (21114 is the console and API; the others are RustDesk's usual ports).
+If the server sits behind a cloud firewall or router, open TCP 31114–31119 and UDP 31116
+there too.
 
 ## Quick start (Docker)
 
 ```sh
 git clone https://github.com/nano-rex/russdesk.git
 cd russdesk
-docker compose up -d
-docker compose logs russdesk | grep password   # first admin password
+RUSSDESK_HOST=rd.example.com docker compose up -d   # your public name or IP
+docker compose logs russdesk | grep password        # first admin password
 ```
 
 This starts `hbbs`, `hbbr` (the official open-source images) and RussDesk. Open
-`http://<server>:21114`, sign in as `admin`, and change the password under **Account**.
+`http://<server>:31114`, sign in as `admin`, and change the password under **Account**.
 
-Open TCP 21114–21119 and UDP 21116 on the firewall, as for a normal RustDesk server.
+Open TCP 31114–31119 and UDP 31116 on the firewall.
 
 ### Pointing clients at it
 
 In RustDesk go to **Settings → Network → ID/Relay server** and enter:
 
-* **ID server**: your server's address
-* **Key**: the content of `hbbs-data/id_ed25519.pub` (also shown on the console dashboard)
+* **ID server**: your server's address **with port 31116**, e.g. `rd.example.com:31116`
+* **Key**: the content of `id_ed25519.pub` (also shown on the console dashboard)
+* **Relay server**: leave empty (hbbs tells clients to use port 31117)
 * **API server**: leave it **empty**
 
-With the API server empty the client uses `http://<ID server>:21114` by itself, which is
-where RussDesk listens. Or copy the config string from the dashboard and use the
-clipboard-import button on that settings page.
+With the API server empty the client uses the ID server's port minus 2, here
+`http://rd.example.com:31114`, which is where RussDesk listens. Or copy the config string
+from the dashboard and use the clipboard-import button on that settings page.
 
 Then **log in** from the client's account menu with a RussDesk user. Devices also show up
 without anyone logging in, as soon as they send a heartbeat.
@@ -148,7 +166,7 @@ RUSSDESK_HBBS_KEY_FILE=/path/to/id_ed25519.pub python3 -m russdesk --data-dir ./
 
 | Variable | Default | |
 | --- | --- | --- |
-| `RUSSDESK_PORT` | `21114` | Listen port. Keep 21114 so clients find it without an API server setting. |
+| `RUSSDESK_PORT` | `31114` | Listen port. Keep it two below hbbs' port so clients find it without an API server setting. |
 | `RUSSDESK_HOST` | `0.0.0.0` | Listen address. |
 | `RUSSDESK_DATA_DIR` | `./data` | SQLite database (`russdesk.db`) and recordings. |
 | `RUSSDESK_HBBS_KEY_FILE` | — | hbbs' `id_ed25519.pub`, shown to clients. |
@@ -164,14 +182,14 @@ echo 'new-password-here' | python3 -m russdesk --data-dir ./data --reset-passwor
 
 ## Behind a reverse proxy (HTTPS)
 
-Proxy everything to `127.0.0.1:21114`, set `RUSSDESK_TRUST_PROXY=1`, set **Settings → API
+Proxy everything to `127.0.0.1:31114`, set `RUSSDESK_TRUST_PROXY=1`, set **Settings → API
 server** to `https://your.host`, and give clients that API server. Console cookies get the
 `Secure` flag when the proxy reports `X-Forwarded-Proto: https`.
 
 ## Security notes
 
 * Device endpoints (`/api/heartbeat`, `/api/sysinfo`, `/api/audit/*`, `/api/record`) are
-  unauthenticated, as in the client protocol. Anyone who can reach port 21114 can add
+  unauthenticated, as in the client protocol. Anyone who can reach port 31114 can add
   device entries or log lines. Restrict the port to your clients' networks if that matters.
 * Passwords are hashed with scrypt; tokens are stored as SHA-256 hashes; logins are
   rate-limited per IP and per username.

@@ -276,12 +276,25 @@ class ConfigStringTest(ServerTest):
 
     def test_api_server_left_empty_by_default(self):
         self.console_login()
-        self.console("PATCH", "/api/admin/settings", {"id_server": "rd.example.com", "server_key": "KEY="})
+        self.console("PATCH", "/api/admin/settings", {"id_server": "rd.example.com:31116", "server_key": "KEY="})
         cfg = self.console("GET", "/api/admin/client-config").json()
         raw = cfg["config_string"][::-1]
         decoded = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
-        self.assertEqual(decoded["api"], "")  # the client derives http://rd.example.com:21114
-        self.assertEqual(cfg["api_default"], "http://rd.example.com:21114")
+        self.assertEqual(decoded["api"], "")  # the client derives ID port - 2
+        self.assertEqual(cfg["api_default"], "http://rd.example.com:31114")
+
+    def test_default_host_uses_3111x_ports(self):
+        self.console_login()
+        cfg = self.console("GET", "/api/admin/client-config").json()
+        port = self.app.server.server_address[1]  # tests listen on a random port
+        self.assertEqual(cfg["host"], f"127.0.0.1:{port + 2}")
+        self.assertEqual(cfg["api_default"], f"http://127.0.0.1:{port}")
+
+    def test_derived_api_matches_client(self):
+        from russdesk.admin_api import derived_api
+        self.assertEqual(derived_api("rd.example.com:31116"), "http://rd.example.com:31114")
+        self.assertEqual(derived_api("rd.example.com"), "http://rd.example.com:21114")
+        self.assertEqual(derived_api("[2001:db8::1]:31116"), "http://[2001:db8::1]:31114")
 
 
     def test_env_defaults_for_addresses(self):

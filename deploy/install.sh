@@ -1,6 +1,7 @@
 #!/bin/sh
 # Install RussDesk plus RustDesk's open-source hbbs/hbbr on a bare-metal
-# Linux server with systemd. Run from a checkout of the repository:
+# Linux server with systemd. Ports: 31114 console/API, 31115-31119 hbbs/hbbr
+# (TCP), 31116 (UDP). Run from a checkout of the repository:
 #
 #   sudo ./deploy/install.sh --host rd.example.com
 #
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
         --skip-rustdesk) SKIP_RUSTDESK=1; shift ;;
         --no-firewall) FIREWALL=0; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
-        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) awk 'NR > 1 && /^set -eu/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
 done
@@ -129,7 +130,7 @@ Wants=network-online.target
 User=$SVC_USER
 Group=$SVC_USER
 WorkingDirectory=$HBBS_DIR
-ExecStart=$PREFIX_BIN/hbbs -r $HOST
+ExecStart=$PREFIX_BIN/hbbs -p 31116 -r $HOST:31117
 Restart=always
 RestartSec=3
 LimitNOFILE=1000000
@@ -153,7 +154,7 @@ Wants=network-online.target
 User=$SVC_USER
 Group=$SVC_USER
 WorkingDirectory=$HBBS_DIR
-ExecStart=$PREFIX_BIN/hbbr
+ExecStart=$PREFIX_BIN/hbbr -p 31117
 Restart=always
 RestartSec=3
 LimitNOFILE=1000000
@@ -186,10 +187,10 @@ if [ ! -f "$ENV_FILE" ]; then
     umask 077
     cat > "$ENV_FILE" <<EOF
 # RussDesk settings; restart with: systemctl restart russdesk
-RUSSDESK_PORT=21114
+RUSSDESK_PORT=31114
 RUSSDESK_DATA_DIR=$DATA_DIR
 RUSSDESK_HBBS_KEY_FILE=$HBBS_DIR/id_ed25519.pub
-RUSSDESK_ID_SERVER=$HOST
+RUSSDESK_ID_SERVER=$HOST:31116
 # Uncomment behind an HTTPS reverse proxy:
 # RUSSDESK_TRUST_PROXY=1
 # Only used to create the first admin on an empty database:
@@ -201,6 +202,9 @@ EOF
     chmod 0640 "$ENV_FILE"
 else
     echo "Keeping existing $ENV_FILE"
+    # Installs before v0.2 used RustDesk's default 2111X ports.
+    sed -i -e 's/^RUSSDESK_PORT=21114$/RUSSDESK_PORT=31114/' \
+        -e "s|^RUSSDESK_ID_SERVER=[^:]*\$|RUSSDESK_ID_SERVER=$HOST:31116|" "$ENV_FILE"
 fi
 
 cat > "$UNIT_DIR/russdesk.service" <<EOF
@@ -241,12 +245,12 @@ systemctl restart russdesk
 if [ "$FIREWALL" -eq 1 ]; then
     if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         say "Opening ports in ufw"
-        ufw allow 21114:21119/tcp >/dev/null
-        ufw allow 21116/udp >/dev/null
+        ufw allow 31114:31119/tcp >/dev/null
+        ufw allow 31116/udp >/dev/null
     elif command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
         say "Opening ports in firewalld"
-        firewall-cmd --permanent --add-port=21114-21119/tcp >/dev/null
-        firewall-cmd --permanent --add-port=21116/udp >/dev/null
+        firewall-cmd --permanent --add-port=31114-31119/tcp >/dev/null
+        firewall-cmd --permanent --add-port=31116/udp >/dev/null
         firewall-cmd --reload >/dev/null
     fi
 fi
@@ -256,7 +260,7 @@ say "Waiting for services"
 KEY=""
 i=0
 while [ $i -lt 30 ]; do
-    if python3 -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:21114/api/login-options", timeout=2)' 2>/dev/null; then
+    if python3 -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:31114/api/login-options", timeout=2)' 2>/dev/null; then
         [ -f "$HBBS_DIR/id_ed25519.pub" ] && KEY=$(cat "$HBBS_DIR/id_ed25519.pub")
         if [ -n "$KEY" ] || [ "$SKIP_RUSTDESK" -eq 1 ]; then break; fi
     fi
@@ -267,15 +271,15 @@ done
 
 echo
 echo "RussDesk is running."
-echo "  Console:   http://$HOST:21114"
+echo "  Console:   http://$HOST:31114"
 if [ -n "$NEW_PASSWORD" ]; then
     echo "  Login:     admin / $NEW_PASSWORD   (change it under Account)"
 fi
 echo
 echo "Client settings (RustDesk → Settings → Network → ID/Relay server):"
-echo "  ID server: $HOST"
+echo "  ID server: $HOST:31116"
 echo "  Key:       ${KEY:-(set it in the console: Settings → Server public key)}"
 echo "  API server: leave empty"
 echo
-echo "Open TCP 21114-21119 and UDP 21116 on any firewall in front of this server."
+echo "Open TCP 31114-31119 and UDP 31116 on any firewall in front of this server."
 echo "Logs: journalctl -u russdesk -u rustdesk-hbbs -u rustdesk-hbbr -f"

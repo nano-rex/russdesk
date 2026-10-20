@@ -1123,15 +1123,32 @@ def client_config(app, req):
     host_header = (req.headers.get("Host") or "").strip()
     hostname = host_header.rsplit(":", 1)[0] if not host_header.startswith("[") else \
         host_header.split("]")[0] + "]"
+    if not s["id_server"] and not app.cfg.id_server and hostname:
+        # By convention hbbs listens two ports above this server (31116 for 31114).
+        port = app.server.server_address[1] if getattr(app, "server", None) else app.cfg.port
+        hostname = f"{hostname}:{port + 2}"
     host = s["id_server"] or app.cfg.id_server or hostname
-    # Left empty, the client derives http://<ID server>:21114 by itself, which
-    # is where this server listens by default.
     relay = s["relay_server"] or app.cfg.relay_server
     config = {"host": host, "relay": relay, "api": s["api_server"], "key": hbbs_key(app)}
     encoded = base64.urlsafe_b64encode(
         json.dumps(config, separators=(",", ":")).encode()).decode()[::-1]
-    host_only = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-    return dict(config, config_string=encoded, api_default=f"http://{host_only}:21114" if host_only else "")
+    return dict(config, config_string=encoded, api_default=derived_api(host))
+
+
+def derived_api(host):
+    """The API URL a client derives when its API server field is empty: the ID
+    server's port minus 2, or 21114 when no port is given (common.rs
+    get_api_server)."""
+    if not host:
+        return ""
+    if host.startswith("["):
+        name, _, port = host.partition("]:")
+        name += "]"
+    elif host.count(":") == 1:
+        name, _, port = host.partition(":")
+    else:
+        name, port = host, ""
+    return f"http://{name}:{int(port) - 2 if port.isdigit() else 21114}"
 
 
 @router.route("GET", "/api/admin/client-config")

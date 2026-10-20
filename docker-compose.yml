@@ -1,10 +1,13 @@
-# RustDesk's open-source ID/relay servers plus RussDesk on port 21114.
-# Clients only need the ID server address and the key: with the API server
-# field left empty they use http://<ID server>:21114 automatically.
+# RustDesk's open-source ID/relay servers plus RussDesk, on ports 31114-31119:
+#   31114 RussDesk console/API   31116 hbbs (TCP+UDP)   31117 hbbr
+#   31115, 31118, 31119 hbbs NAT test and the WebSocket ports
+# Start with:  RUSSDESK_HOST=rd.example.com docker compose up -d
+# Clients need only the ID server (rd.example.com:31116) and the key: with the
+# API server field empty they use port 31116 - 2 = 31114 automatically.
 services:
   hbbs:
     image: rustdesk/rustdesk-server:latest
-    command: hbbs
+    command: hbbs -p 31116 -r ${RUSSDESK_HOST:?set RUSSDESK_HOST to your public name or IP}:31117
     volumes:
       - ./hbbs-data:/root
     network_mode: host
@@ -13,7 +16,7 @@ services:
 
   hbbr:
     image: rustdesk/rustdesk-server:latest
-    command: hbbr
+    command: hbbr -p 31117
     volumes:
       - ./hbbs-data:/root
     network_mode: host
@@ -22,6 +25,7 @@ services:
   russdesk:
     build: .
     environment:
+      RUSSDESK_ID_SERVER: ${RUSSDESK_HOST}:31116
       # Read hbbs' public key so the console can show it to clients.
       RUSSDESK_HBBS_KEY_FILE: /hbbs/id_ed25519.pub
       # Optional: fixed first admin password (otherwise one is printed in the log).
@@ -30,5 +34,5 @@ services:
       - ./russdesk-data:/data
       - ./hbbs-data:/hbbs:ro
     ports:
-      - "21114:21114"
+      - "31114:31114"
     restart: unless-stopped

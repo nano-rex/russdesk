@@ -14,7 +14,7 @@ def _bool(value, default=False):
 class Config:
     data_dir: str = "./data"
     host: str = "0.0.0.0"
-    port: int = 21114
+    port: int = 31114
     # Path to hbbs' public key (id_ed25519.pub); shown in the console so
     # admins can hand it to clients.
     hbbs_key_file: str = ""

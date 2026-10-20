@@ -17,9 +17,10 @@ these calls, this file and `russdesk/client_api.py` need re-checking.
 
 ## No API server setting needed
 
-If the client's API server field is empty it derives
-`http://<ID server host>:21114`. Run RussDesk on the hbbs host on port 21114
-and clients only need the ID server and key. Set an explicit API server only
+If the client's API server field is empty it derives `http://<ID server
+host>:<ID port − 2>`, or port 21114 when the ID server has no port. RussDesk
+runs hbbs on 31116 and itself on 31114, so clients only need the ID server
+(`host:31116`) and key. Set an explicit API server only
 for HTTPS (reverse proxy) or another host/port. `https://…:21114` is rewritten
 by the client to `https://…` unless the `allow-https-21114` option is set.
 
