@@ -14,13 +14,15 @@
 #   --uninstall          stop and remove services, binaries and code (data is kept)
 set -eu
 
-PREFIX_BIN=/usr/local/bin
+PREFIX_BIN=/usr/local/lib/russdesk/bin
 APP_DIR=/opt/russdesk
-HBBS_DIR=/var/lib/rustdesk-server
+HBBS_DIR=/var/lib/russdesk-hbbs
 DATA_DIR=/var/lib/russdesk
 ENV_FILE=/etc/russdesk.env
 UNIT_DIR=/etc/systemd/system
-SVC_USER=rustdesk
+# Own names throughout, so RussDesk can sit beside RustDesk Server Pro or the
+# official rustdesk-server packages (which use rustdesk-hbbs/hbbr and "rustdesk").
+SVC_USER=russdesk
 
 HOST=""
 ADMIN_PASSWORD=""
@@ -50,13 +52,13 @@ command -v systemctl >/dev/null || die "systemd is required"
 
 if [ "$UNINSTALL" -eq 1 ]; then
     say "Stopping and removing services"
-    for s in russdesk rustdesk-hbbs rustdesk-hbbr; do
+    for s in russdesk russdesk-hbbs russdesk-hbbr; do
         systemctl disable --now "$s" 2>/dev/null || true
         rm -f "$UNIT_DIR/$s.service"
     done
     systemctl daemon-reload
     rm -rf "$APP_DIR"
-    rm -f "$PREFIX_BIN/hbbs" "$PREFIX_BIN/hbbr" "$PREFIX_BIN/rustdesk-utils"
+    rm -rf "$PREFIX_BIN"
     echo "Removed. Kept: $DATA_DIR, $HBBS_DIR (server key), $ENV_FILE and the '$SVC_USER' user."
     echo "Delete them by hand for a clean slate: rm -rf $DATA_DIR $HBBS_DIR $ENV_FILE; userdel $SVC_USER"
     exit 0
@@ -114,15 +116,16 @@ if [ "$SKIP_RUSTDESK" -eq 0 ]; then
         [ -f "$TMP/x/$ARCH/$b" ] || die "$b missing from $URL"
     done
     # Replace binaries of running services safely.
-    systemctl stop rustdesk-hbbs rustdesk-hbbr 2>/dev/null || true
+    systemctl stop russdesk-hbbs russdesk-hbbr 2>/dev/null || true
+    install -d -m 0755 "$PREFIX_BIN"
     for b in hbbs hbbr rustdesk-utils; do
         [ -f "$TMP/x/$ARCH/$b" ] && install -m 0755 "$TMP/x/$ARCH/$b" "$PREFIX_BIN/$b"
     done
     "$PREFIX_BIN/hbbs" --version
 
-    cat > "$UNIT_DIR/rustdesk-hbbs.service" <<EOF
+    cat > "$UNIT_DIR/russdesk-hbbs.service" <<EOF
 [Unit]
-Description=RustDesk ID/rendezvous server (hbbs)
+Description=RussDesk: RustDesk ID/rendezvous server (hbbs, port 31116)
 After=network-online.target
 Wants=network-online.target
 
@@ -144,9 +147,9 @@ ReadWritePaths=$HBBS_DIR
 [Install]
 WantedBy=multi-user.target
 EOF
-    cat > "$UNIT_DIR/rustdesk-hbbr.service" <<EOF
+    cat > "$UNIT_DIR/russdesk-hbbr.service" <<EOF
 [Unit]
-Description=RustDesk relay server (hbbr)
+Description=RussDesk: RustDesk relay server (hbbr, port 31117)
 After=network-online.target
 Wants=network-online.target
 
@@ -204,13 +207,14 @@ else
     echo "Keeping existing $ENV_FILE"
     # Installs before v0.2 used RustDesk's default 2111X ports.
     sed -i -e 's/^RUSSDESK_PORT=21114$/RUSSDESK_PORT=31114/' \
-        -e "s|^RUSSDESK_ID_SERVER=[^:]*\$|RUSSDESK_ID_SERVER=$HOST:31116|" "$ENV_FILE"
+        -e "s|^RUSSDESK_ID_SERVER=[^:]*\$|RUSSDESK_ID_SERVER=$HOST:31116|" \
+        -e "s|^RUSSDESK_HBBS_KEY_FILE=/var/lib/rustdesk-server/|RUSSDESK_HBBS_KEY_FILE=$HBBS_DIR/|" "$ENV_FILE"
 fi
 
 cat > "$UNIT_DIR/russdesk.service" <<EOF
 [Unit]
 Description=RussDesk web console and API server for RustDesk
-After=network-online.target rustdesk-hbbs.service
+After=network-online.target russdesk-hbbs.service
 Wants=network-online.target
 
 [Service]
@@ -235,8 +239,8 @@ EOF
 
 systemctl daemon-reload
 if [ "$SKIP_RUSTDESK" -eq 0 ]; then
-    systemctl enable --now rustdesk-hbbr rustdesk-hbbs
-    systemctl restart rustdesk-hbbr rustdesk-hbbs
+    systemctl enable --now russdesk-hbbr russdesk-hbbs
+    systemctl restart russdesk-hbbr russdesk-hbbs
 fi
 systemctl enable --now russdesk
 systemctl restart russdesk
@@ -267,7 +271,7 @@ while [ $i -lt 30 ]; do
     i=$((i + 1))
     sleep 1
 done
-[ $i -lt 30 ] || { systemctl --no-pager status russdesk rustdesk-hbbs 2>&1 | tail -20; die "services did not come up"; }
+[ $i -lt 30 ] || { systemctl --no-pager status russdesk russdesk-hbbs 2>&1 | tail -20; die "services did not come up"; }
 
 echo
 echo "RussDesk is running."
@@ -282,4 +286,4 @@ echo "  Key:       ${KEY:-(set it in the console: Settings → Server public key
 echo "  API server: leave empty"
 echo
 echo "Open TCP 31114-31119 and UDP 31116 on any firewall in front of this server."
-echo "Logs: journalctl -u russdesk -u rustdesk-hbbs -u rustdesk-hbbr -f"
+echo "Logs: journalctl -u russdesk -u russdesk-hbbs -u russdesk-hbbr -f"

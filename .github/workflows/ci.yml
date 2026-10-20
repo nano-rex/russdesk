@@ -70,11 +70,11 @@ jobs:
         run: sudo ./deploy/install.sh --host 127.0.0.1 --admin-password ci-password-1
       - name: Check services
         run: |
-          systemctl is-active russdesk rustdesk-hbbs rustdesk-hbbr
+          systemctl is-active russdesk russdesk-hbbs russdesk-hbbr
           sudo ss -ltnup | grep -E ':3111[4-9]'
           curl -sf -c jar -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-1"}' http://127.0.0.1:31114/api/admin/login
           curl -sf -b jar http://127.0.0.1:31114/api/admin/client-config | tee cfg.json
-          grep -q "$(sudo cat /var/lib/rustdesk-server/id_ed25519.pub)" cfg.json
+          grep -q "$(sudo cat /var/lib/russdesk-hbbs/id_ed25519.pub)" cfg.json
       - name: Upgrade keeps data, uninstall removes services
         run: |
           sudo ./deploy/install.sh --host 127.0.0.1

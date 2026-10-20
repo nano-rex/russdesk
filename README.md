@@ -97,24 +97,27 @@ sudo ./deploy/install.sh --host rd.example.com      # your public DNS name or IP
 The script:
 
 * downloads the official open-source `hbbs`/`hbbr` release for your CPU (x86-64, ARM64,
-  ARMv7, i386) into `/usr/local/bin`
+  ARMv7, i386) into `/usr/local/lib/russdesk/bin`
 * installs RussDesk to `/opt/russdesk`
-* creates a `rustdesk` system user and three systemd services: `rustdesk-hbbs`,
-  `rustdesk-hbbr`, `russdesk` (sandboxed, restart on failure, start at boot)
+* creates a `russdesk` system user and three systemd services: `russdesk-hbbs`,
+  `russdesk-hbbr`, `russdesk` (sandboxed, restart on failure, start at boot)
+
+All names, paths and ports are RussDesk's own, so it can run on the same machine as RustDesk
+Server Pro or the official `rustdesk-server` packages without touching them.
 * writes `/etc/russdesk.env` and opens the ports in ufw or firewalld if one is active
 * prints the console address, the first admin password and the key for clients
 
 | Path | |
 | --- | --- |
-| `/var/lib/rustdesk-server/` | hbbs data and the **server key** (`id_ed25519`, `id_ed25519.pub`). Back it up; losing it means re-keying every client. |
+| `/var/lib/russdesk-hbbs/` | hbbs data and the **server key** (`id_ed25519`, `id_ed25519.pub`). Back it up; losing it means re-keying every client. |
 | `/var/lib/russdesk/russdesk.db` | Console database (users, devices, logs, address books). |
 | `/etc/russdesk.env` | RussDesk settings (see the table under *Without Docker*). |
 
 Day-to-day:
 
 ```sh
-systemctl status russdesk rustdesk-hbbs rustdesk-hbbr
-journalctl -u russdesk -u rustdesk-hbbs -u rustdesk-hbbr -f
+systemctl status russdesk russdesk-hbbs russdesk-hbbr
+journalctl -u russdesk -u russdesk-hbbs -u russdesk-hbbr -f
 git pull && sudo ./deploy/install.sh --host rd.example.com    # upgrade; data and password are kept
 sudo ./deploy/install.sh --uninstall                           # remove services, keep data
 ```
