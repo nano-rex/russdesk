@@ -27,6 +27,7 @@ class Request:
         self.scheme = scheme
         self.user = None
         self.token = None
+        self.actor = None
 
     def json(self, default=None):
         """Parse the body as JSON whatever the Content-Type (the client
@@ -94,16 +95,16 @@ class Router:
         return decorator
 
     def match(self, method, path):
-        allowed = False
+        """(handler, params) for a route, or (None, known) where known says
+        whether the path exists here with another method."""
+        known = False
         for m, regex, handler in self._routes:
             found = regex.match(path)
             if found:
                 if m == method:
                     return handler, found.groupdict()
-                allowed = True
-        if allowed:
-            raise HTTPError(405, "Method not allowed")
-        return None, None
+                known = True
+        return None, known
 
 
 def make_handler(app):

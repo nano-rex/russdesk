@@ -239,7 +239,7 @@ class AccessTest(ServerTest):
         ids = lambda tok: sorted(p["id"] for p in self.client("GET", "/api/peers?current=1&pageSize=100&accessible=&status=1", token=tok).json()["data"])
         self.assertEqual(ids(sam), ["200"])
         self.console("PATCH", f"/api/admin/user-groups/{g1}",
-                     {"access_user_groups": [g2], "access_device_groups": [dg]})
+                     {"allowed_outgoings": [{"type": 0, "id": g2}, {"type": 1, "id": dg}]})
         self.assertEqual(ids(sam), ["200", "300", "400"])
         self.assertEqual(ids(sue), ["300"])
         users = self.client("GET", "/api/users?current=1&pageSize=100&accessible=&status=1", token=sam).json()

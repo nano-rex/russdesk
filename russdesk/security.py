@@ -115,3 +115,29 @@ class RateLimiter:
     def reset(self, key):
         with self._lock:
             self._hits.pop(key, None)
+
+
+# -- 2FA backup codes (Pro binds 6 one-time codes when TOTP is turned on) -------
+
+def new_backup_codes(count=6):
+    """Return (plain codes to show once, hashes to store)."""
+    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+    codes = ["".join(secrets.choice(alphabet) for _ in range(4)) + "-" +
+             "".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(count)]
+    return codes, [token_hash(c) for c in codes]
+
+
+def match_backup_code(hashes, code):
+    """Index of the stored hash matching `code`, or -1."""
+    code = (code or "").strip().lower().replace(" ", "")
+    if len(code) == 8 and "-" not in code:
+        code = code[:4] + "-" + code[4:]
+    digest = token_hash(code)
+    for i, h in enumerate(hashes):
+        if hmac.compare_digest(h, digest):
+            return i
+    return -1
+
+
+def new_email_code():
+    return "%06d" % secrets.randbelow(1000000)

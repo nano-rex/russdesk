@@ -1,4 +1,3 @@
-import json
 import unittest
 
 from helpers import ADMIN_PASSWORD, ServerTest
@@ -30,7 +29,9 @@ class ConsoleAuthTest(ServerTest):
         self.console("POST", "/api/admin/logout")
         self.console_login("eve", "eve-password")
         self.assertEqual(self.console("GET", "/api/admin/users").status, 403)
-        self.assertEqual(self.console("GET", "/api/admin/logs/connections").status, 403)
+        self.assertEqual(self.console("GET", "/api/admin/admin-roles").status, 403)
+        # Like Pro, a normal user sees only their own logs.
+        self.assertEqual(self.console("GET", "/api/admin/logs/connections").json()["total"], 0)
         self.assertEqual(self.console("GET", "/api/admin/devices").status, 200)
         self.assertEqual(self.console("GET", "/api/admin/address-books").status, 200)
 
@@ -44,7 +45,7 @@ class ConsoleAuthTest(ServerTest):
         self.console_login()
         uid = self.console("POST", "/api/admin/users", {"name": "tim", "password": "tim-password"}).json()["id"]
         token = self.client_login("tim", "tim-password", device="77")
-        self.console("PATCH", f"/api/admin/users/{uid}", {"status": 0})
+        self.assertEqual(self.console("POST", f"/api/admin/users/{uid}/disable").status, 200)
         self.assertEqual(self.client("POST", "/api/currentUser", {}, token).status, 401)
 
 
@@ -82,7 +83,7 @@ class ConsoleDataTest(ServerTest):
                                                 "peer": ["=cmd", "mallory"], "type": 0})
         data = self.console("GET", "/api/admin/logs/connections").json()
         self.assertEqual(data["total"], 1)
-        self.assertEqual(data["items"][0]["type"], "Remote desktop")
+        self.assertEqual(data["items"][0]["type"], "Remote Desktop")
         csv_text = self.console("GET", "/api/admin/logs/connections?format=csv").text
         self.assertIn("'=cmd", csv_text)  # formula injection neutralised
         console_log = self.console("GET", "/api/admin/logs/console").json()

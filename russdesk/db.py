@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -33,14 +33,6 @@ CREATE TABLE IF NOT EXISTS device_groups (
     note        TEXT NOT NULL DEFAULT '',
     strategy_id INTEGER REFERENCES strategies(id) ON DELETE SET NULL,
     created_at  INTEGER NOT NULL
-);
-
--- Members of user_group_id may see the users of, or the devices in, the target.
-CREATE TABLE IF NOT EXISTS group_access (
-    user_group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
-    target_type   TEXT NOT NULL CHECK (target_type IN ('user_group', 'device_group')),
-    target_id     INTEGER NOT NULL,
-    PRIMARY KEY (user_group_id, target_type, target_id)
 );
 
 CREATE TABLE IF NOT EXISTS strategies (
@@ -236,7 +228,145 @@ DEFAULT_SETTINGS = {
     "recordings_max_mb": 10240,
     "max_peers_per_ab": 0,
     "default_strategy_id": None,
+    # Settings > Others, as in Pro
+    "only_admin_logs": False,
+    "allow_non_admin_share": False,
+    "disable_accessible_devices": False,
+    "console_url": "",
+    # Settings > SMTP
+    "smtp_host": "",
+    "smtp_port": 587,
+    "smtp_security": "starttls",  # starttls | ssl | none
+    "smtp_user": "",
+    "smtp_password": "",
+    "smtp_from": "",
 }
+
+# Applied in order to bring an older database up to SCHEMA_VERSION. The v1
+# SCHEMA above always runs first, so a fresh database goes through them too.
+V2_COLUMNS = [
+    ("users", "guid", "TEXT"),
+    ("users", "email_verification", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "force_2fa", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "totp_backup", "TEXT NOT NULL DEFAULT '[]'"),
+    ("users", "totp_set_at", "INTEGER"),
+    ("users", "invite_hash", "TEXT NOT NULL DEFAULT ''"),
+    ("users", "invite_expires", "INTEGER"),
+    ("user_groups", "guid", "TEXT"),
+    ("device_groups", "guid", "TEXT"),
+    ("strategies", "guid", "TEXT"),
+    ("strategies", "enabled", "INTEGER NOT NULL DEFAULT 1"),
+    ("devices", "guid", "TEXT"),
+    ("devices", "disabled", "INTEGER NOT NULL DEFAULT 0"),
+    ("devices", "name_override", "TEXT NOT NULL DEFAULT ''"),
+    ("devices", "username_override", "TEXT NOT NULL DEFAULT ''"),
+    ("address_books", "password", "TEXT NOT NULL DEFAULT ''"),
+    ("ab_peers", "deleted_at", "INTEGER"),
+    ("conn_logs", "note", "TEXT NOT NULL DEFAULT ''"),
+    ("conn_logs", "controller", "TEXT NOT NULL DEFAULT ''"),
+    ("console_logs", "typ", "INTEGER"),
+    ("console_logs", "iop", "INTEGER"),
+]
+
+V2_TABLES = """
+-- Who can see what: a user or user group may access a user group's users'
+-- devices or a device group's devices. Pro's "access to" / "accessed from".
+CREATE TABLE IF NOT EXISTS access_rules (
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('user', 'user_group')),
+    subject_id   INTEGER NOT NULL,
+    target_type  TEXT NOT NULL CHECK (target_type IN ('user_group', 'device_group')),
+    target_id    INTEGER NOT NULL,
+    PRIMARY KEY (subject_type, subject_id, target_type, target_id)
+);
+CREATE INDEX IF NOT EXISTS access_rules_target ON access_rules(target_type, target_id);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           INTEGER PRIMARY KEY,
+    guid         TEXT NOT NULL UNIQUE,
+    name         TEXT NOT NULL,
+    token_hash   TEXT NOT NULL UNIQUE,
+    user_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    perms        TEXT NOT NULL DEFAULT '{}',
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER,
+    last_used_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS admin_roles (
+    id            INTEGER PRIMARY KEY,
+    guid          TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    type          TEXT NOT NULL CHECK (type IN ('global', 'individual', 'group')),
+    perms         TEXT NOT NULL DEFAULT '[]',
+    user_groups   TEXT NOT NULL DEFAULT '[]',
+    device_groups TEXT NOT NULL DEFAULT '[]',
+    unassigned    INTEGER NOT NULL DEFAULT 0,
+    note          TEXT NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_admin_roles (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL REFERENCES admin_roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, role_id)
+);
+
+-- Shared address book rules: a user, a user group, or everyone.
+CREATE TABLE IF NOT EXISTS ab_rules2 (
+    id            INTEGER PRIMARY KEY,
+    rule_guid     TEXT NOT NULL UNIQUE,
+    guid          TEXT NOT NULL REFERENCES address_books(guid) ON DELETE CASCADE,
+    user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    user_group_id INTEGER REFERENCES user_groups(id) ON DELETE CASCADE,
+    everyone      INTEGER NOT NULL DEFAULT 0,
+    rule          INTEGER NOT NULL CHECK (rule IN (1, 2, 3))
+);
+"""
+
+
+def _columns(c, table):
+    return {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+
+
+def migrate_v2(c):
+    for table, column, decl in V2_COLUMNS:
+        if column not in _columns(c, table):
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    for statement in _statements(V2_TABLES):
+        c.execute(statement)
+    for table in ("users", "user_groups", "device_groups", "strategies", "devices"):
+        for row in c.execute(f"SELECT rowid FROM {table} WHERE guid IS NULL").fetchall():
+            c.execute(f"UPDATE {table} SET guid = ? WHERE rowid = ?", (str(uuid.uuid4()), row[0]))
+        c.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {table}_guid ON {table}(guid)")
+    # Move v1 group access and address book rules to their v2 tables.
+    if "group_access" in _tables(c):
+        c.execute("INSERT OR IGNORE INTO access_rules(subject_type, subject_id, target_type, target_id) "
+                  "SELECT 'user_group', user_group_id, target_type, target_id FROM group_access")
+        c.execute("DROP TABLE group_access")
+    if "rule" in _columns(c, "ab_rules") and "rule_guid" not in _columns(c, "ab_rules"):
+        for r in c.execute("SELECT * FROM ab_rules").fetchall():
+            c.execute("INSERT INTO ab_rules2(rule_guid, guid, user_id, user_group_id, everyone, rule) "
+                      "VALUES (?, ?, ?, ?, 0, ?)",
+                      (str(uuid.uuid4()), r["guid"], r["user_id"], r["user_group_id"], r["rule"]))
+        c.execute("DROP TABLE ab_rules")
+    if "ab_rules2" in _tables(c):
+        c.execute("ALTER TABLE ab_rules2 RENAME TO ab_rules")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ab_rules_user ON ab_rules(guid, user_id) WHERE user_id IS NOT NULL")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ab_rules_group ON ab_rules(guid, user_group_id) "
+              "WHERE user_group_id IS NOT NULL")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ab_rules_everyone ON ab_rules(guid) WHERE everyone = 1")
+
+
+def _tables(c):
+    return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def _statements(script):
+    """Split a script of CREATE statements; executescript() would commit."""
+    return [s.strip() for s in script.split(";") if "CREATE" in s]
+
+
+MIGRATIONS = {2: migrate_v2}
 
 
 def now():
@@ -274,10 +404,20 @@ class Database:
         c.executescript(SCHEMA)
         row = c.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
         if row is None:
-            c.execute(
-                "INSERT INTO meta(key, value) VALUES ('schema_version', ?), ('instance_id', ?)",
-                (str(SCHEMA_VERSION), uuid.uuid4().hex),
-            )
+            c.execute("INSERT INTO meta(key, value) VALUES ('schema_version', '1'), ('instance_id', ?)",
+                      (uuid.uuid4().hex,))
+            version = 1
+        else:
+            version = int(row["value"])
+        while version < SCHEMA_VERSION:
+            version += 1
+            c.execute("PRAGMA foreign_keys = OFF")  # table rebuilds
+            try:
+                with self.tx() as t:
+                    MIGRATIONS[version](t)
+                    t.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(version),))
+            finally:
+                c.execute("PRAGMA foreign_keys = ON")
 
     # -- helpers -----------------------------------------------------------
 

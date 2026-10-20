@@ -6,13 +6,12 @@ import os
 import secrets
 import sqlite3
 import threading
-import time
 import traceback
 
-from . import admin_api, client_api
+from . import admin_api, auth, client_api, rest_api
 from .config import Config
 from .db import Database, now
-from .models import personal_book
+from .models import new_guid, personal_book
 from .security import hash_password
 from .web import HTTPError, Response, Server, error_response, make_handler
 
@@ -28,7 +27,7 @@ class App:
     def __init__(self, cfg=None):
         self.cfg = cfg or Config.from_env()
         self.db = Database(self.cfg.db_path)
-        self.routers = [client_api.router, admin_api.router]
+        self.routers = [client_api.router, rest_api.router, admin_api.router]
         self.common_headers = [
             ("X-Content-Type-Options", "nosniff"),
             ("Referrer-Policy", "no-referrer"),
@@ -46,8 +45,8 @@ class App:
         if generated:
             password = secrets.token_urlsafe(12)
         cur = self.db.run(
-            "INSERT INTO users(name, password_hash, is_admin, status, created_at) VALUES (?, ?, 1, 1, ?)",
-            (self.cfg.admin_user, hash_password(password), now()),
+            "INSERT INTO users(guid, name, password_hash, is_admin, status, created_at) VALUES (?, ?, ?, 1, 1, ?)",
+            (new_guid(), self.cfg.admin_user, hash_password(password), now()),
         )
         personal_book(self.db, cur.lastrowid)
         if generated:
@@ -78,13 +77,17 @@ class App:
             return error_response(500, "Internal server error")
 
     def route(self, req):
+        known = False
+        # Several routers may serve one path with different methods (GET
+        # /api/users for clients, POST /api/users for the REST API).
         for router in self.routers:
             handler, params = router.match(req.method, req.path)
             if handler is not None:
                 resp = handler(self, req, **params)
                 resp.headers.append(("Cache-Control", "no-store"))
                 return resp
-        raise HTTPError(404, "Not found")
+            known = known or params
+        raise HTTPError(405, "Method not allowed") if known else HTTPError(404, "Not found")
 
     def static(self, path):
         root = os.path.realpath(self.cfg.static_dir)
@@ -119,10 +122,8 @@ class App:
             for table, column in (("conn_logs", "started_at"), ("file_logs", "created_at"),
                                   ("alarm_logs", "created_at"), ("console_logs", "created_at")):
                 db.run(f"DELETE FROM {table} WHERE {column} < ?", (cutoff,))
-        with client_api._pending_lock:
-            for secret, (_, expires, _) in list(client_api._pending_2fa.items()):
-                if expires < time.time():
-                    client_api._pending_2fa.pop(secret, None)
+        db.run("UPDATE users SET invite_hash = '' WHERE status = -1 AND invite_expires < ?", (now(),))
+        auth.expire_pending()
 
     def _maintenance_loop(self):
         while not self._stop.wait(300):

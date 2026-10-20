@@ -1,4 +1,4 @@
-"""Domain logic shared by the client API and the console API."""
+"""Domain logic shared by the client API, the console API and the REST API."""
 
 import hashlib
 import json
@@ -10,22 +10,56 @@ ONLINE_SECONDS = 45  # clients heartbeat every 15 s when idle
 
 RULE_READ, RULE_READ_WRITE, RULE_FULL = 1, 2, 3
 
-CONN_TYPES = {0: "Remote desktop", 1: "File transfer", 2: "Port forward",
-              3: "View camera", 4: "Terminal"}
-PRIMARY_AUTH = {1: "Click to accept", 2: "Temporary password",
-                3: "Permanent password", 4: "Switch sides"}
-TWO_FACTOR = {1: "TOTP", 2: "Trusted device"}
-FILE_TYPES = {0: "Send to remote", 1: "Receive from remote"}
+# Pro's names, as shown in its console and printed by audits.py
+CONN_TYPES = {0: "Remote Desktop", 1: "File Transfer", 2: "Port Transfer",
+              3: "View Camera", 4: "Terminal"}
+PRIMARY_AUTH = {1: "Click Confirmation", 2: "One-time Password",
+                3: "Permanent Password", 4: "Switch Sides"}
+TWO_FACTOR = {1: "2FA Code", 2: "Trusted Device"}
+FILE_TYPES = {0: "Controlling Side -> Controlled Device", 1: "Controlled Device -> Controlling Side"}
 ALARM_TYPES = {
-    0: "IP not in whitelist",
-    1: "Over 30 failed attempts",
-    2: "6 failed attempts within a minute",
-    6: "Too many attempts from an IPv6 prefix",
-    7: "Terminal OS login backoff",
-    8: "Terminal OS login concurrency",
+    0: "Access attempt outside the IP whitelist",
+    1: "Over 30 consecutive access attempts",
+    2: "Multiple access attempts within one minute",
+    3: "Over 30 consecutive login attempts",
+    4: "Multiple login attempts within one minute",
+    5: "Multiple login attempts within one hour",
+    6: "Too many consecutive access attempts from a single IPv6 prefix",
+    7: "Multiple failed Terminal (Run as administrator) login attempts",
+    8: "Multiple simultaneous Terminal (Run as administrator) login attempts",
     9: "Session scope violation",
-    10: "ID not in whitelist",
+    10: "Access attempt outside the ID whitelist",
 }
+LOGIN_ALARMS = (3, 4, 5)
+
+# Console audit categories and operations, numbered like Pro (audits.py).
+CONSOLE_TYPES = {0: "Group Management", 1: "User Management", 2: "Device Management",
+                 3: "Address Book Management", 4: "Admin Role Management", 5: "Settings"}
+CONSOLE_OPS = {
+    "login": (1, 0), "user_group.create": (0, 1), "device_group.create": (0, 1),
+    "user.create": (1, 2), "user.invite": (1, 2), "user_group.delete": (0, 4),
+    "device_group.delete": (0, 4), "device.disconnect": (2, 5), "user.enable": (1, 6),
+    "user.disable": (1, 7), "device.enable": (2, 8), "device.disable": (2, 9),
+    "user_group.update": (0, 10), "device_group.update": (0, 10), "user.update": (1, 11),
+    "device.update": (2, 12), "user.delete": (1, 13), "device.delete": (2, 14),
+    "address_book.create": (3, 15), "address_book.delete": (3, 16),
+    "address_book.rename": (3, 17), "address_book.recycle_delete": (3, 18),
+    "address_book.recycle_empty": (3, 19), "address_book.rule_add": (3, 20),
+    "address_book.rule_delete": (3, 21), "address_book.rule_update": (3, 22),
+}
+CONSOLE_OP_NAMES = {
+    0: "User Login", 1: "Add Group", 2: "Add User", 3: "Add Device", 4: "Delete Groups",
+    5: "Disconnect Device", 6: "Enable Users", 7: "Disable Users", 8: "Enable Devices",
+    9: "Disable Devices", 10: "Update Group", 11: "Update User", 12: "Update Device",
+    13: "Delete User", 14: "Delete Device", 15: "Add Address Book", 16: "Delete Address Book",
+    17: "Change Address Book Name", 18: "Delete Devices in the Address Book Recycle Bin",
+    19: "Empty Address Book Recycle Bin", 20: "Add Address Book Permission",
+    21: "Delete Address Book Permission", 22: "Update Address Book Permission",
+}
+
+# Pushed as the device's IP whitelist while it is disabled: no address
+# matches it, so the client refuses every incoming connection.
+BLOCK_WHITELIST = "255.255.255.255/32"
 
 
 def loads(text, default=None):
@@ -33,6 +67,10 @@ def loads(text, default=None):
         return json.loads(text) if text else default
     except ValueError:
         return default
+
+
+def new_guid():
+    return str(uuid.uuid4())
 
 
 def is_online(device_row, at=None):
@@ -54,88 +92,135 @@ def platform_of(os_text):
     return ""
 
 
+def like(value):
+    """Pro's REST filters: '%' wildcards pass through; '-' means empty."""
+    if value == "-":
+        return ""
+    return value
+
+
 # -- users ---------------------------------------------------------------------
 
-def user_payload(row):
-    """The user object the RustDesk client expects (UserPayload)."""
-    return {
+def user_status(row):
+    """1 normal, 0 disabled, -1 unverified (invited, no password yet)."""
+    return row["status"]
+
+
+def user_payload(row, group_name=None):
+    """The user object the RustDesk client expects (UserPayload), plus the
+    fields Pro's REST API returns."""
+    data = {
+        "guid": row["guid"],
         "name": row["name"],
         "display_name": row["display_name"],
         "email": row["email"],
         "note": row["note"],
-        "status": 1 if row["status"] == 1 else 0,
+        "status": row["status"],
         "is_admin": bool(row["is_admin"]),
         "info": {},
     }
+    if group_name is not None:
+        data["group_name"] = group_name
+    return data
 
 
-def access_scope(db, user):
-    """Return (user_ids, device_group_ids) the user may see, or None for all."""
+def rules_for(db, user):
+    """Access targets granted to a user directly or through their group."""
+    rows = db.all(
+        "SELECT target_type, target_id FROM access_rules WHERE "
+        "(subject_type = 'user' AND subject_id = ?) OR (subject_type = 'user_group' AND subject_id = ?)",
+        (user["id"], user["group_id"] or -1))
+    user_groups = {r["target_id"] for r in rows if r["target_type"] == "user_group"}
+    device_groups = {r["target_id"] for r in rows if r["target_type"] == "device_group"}
+    return user_groups, device_groups
+
+
+def accessible_scope(db, user):
+    """(user_ids, device_group_ids) whose devices the user may connect to, or
+    None for everything (administrators). This is Pro's Access Control."""
     if user["is_admin"]:
         return None
+    user_groups, device_groups = rules_for(db, user)
+    if user["group_id"]:
+        user_groups.add(user["group_id"])
     user_ids = {user["id"]}
-    device_groups = set()
-    group_id = user["group_id"]
-    if group_id:
-        user_groups = {group_id}
-        for row in db.all("SELECT target_type, target_id FROM group_access WHERE user_group_id = ?",
-                          (group_id,)):
-            if row["target_type"] == "user_group":
-                user_groups.add(row["target_id"])
-            else:
-                device_groups.add(row["target_id"])
+    if user_groups:
         marks = ",".join("?" * len(user_groups))
-        for row in db.all(f"SELECT id FROM users WHERE group_id IN ({marks})", tuple(user_groups)):
-            user_ids.add(row["id"])
+        user_ids |= {r["id"] for r in db.all(f"SELECT id FROM users WHERE group_id IN ({marks})",
+                                             tuple(user_groups))}
     return user_ids, device_groups
 
 
-def scope_sql(scope, device_alias="d"):
-    """SQL condition (and params) restricting devices to an access scope."""
+def accessible_sql(scope, alias="d"):
+    """Devices in an access scope that are not disabled (nor their user)."""
+    blocked = (f"{alias}.disabled = 0 AND NOT EXISTS (SELECT 1 FROM users bu "
+               f"WHERE bu.id = {alias}.user_id AND bu.status = 0)")
     if scope is None:
-        return "1", ()
+        return blocked, ()
     user_ids, device_groups = scope
     parts, params = [], []
     if user_ids:
-        parts.append(f"{device_alias}.user_id IN ({','.join('?' * len(user_ids))})")
-        params.extend(user_ids)
+        parts.append(f"{alias}.user_id IN ({','.join('?' * len(user_ids))})")
+        params.extend(sorted(user_ids))
     if device_groups:
-        parts.append(f"{device_alias}.device_group_id IN ({','.join('?' * len(device_groups))})")
-        params.extend(device_groups)
-    return "(" + (" OR ".join(parts) or "0") + ")", tuple(params)
+        parts.append(f"{alias}.device_group_id IN ({','.join('?' * len(device_groups))})")
+        params.extend(sorted(device_groups))
+    return "(" + (" OR ".join(parts) or "0") + f") AND {blocked}", tuple(params)
 
 
-def can_access_device(db, user, device_id):
-    cond, params = scope_sql(access_scope(db, user))
-    return db.one(f"SELECT 1 FROM devices d WHERE d.id = ? AND {cond}", (device_id,) + params) is not None
+def accessible_users(db, user):
+    """Users shown in the client's group tab."""
+    if user["is_admin"]:
+        return None
+    return accessible_scope(db, user)[0]
 
 
 # -- strategies ----------------------------------------------------------------
 
 def effective_strategy(db, device):
-    """Device strategy, else its owner's, else its group's, else the default."""
-    candidates = [device["strategy_id"]]
-    if device["user_id"]:
+    """(strategy row or None, source). Pro's priority: the device's own
+    strategy, then its user's, then its device group's. If the strategy that
+    applies is disabled the device is not managed by any strategy."""
+    sid, source = device["strategy_id"], "device"
+    if not sid and device["user_id"]:
         row = db.one("SELECT strategy_id FROM users WHERE id = ?", (device["user_id"],))
-        candidates.append(row["strategy_id"] if row else None)
-    if device["device_group_id"]:
+        sid, source = (row["strategy_id"] if row else None), "user"
+    if not sid and device["device_group_id"]:
         row = db.one("SELECT strategy_id FROM device_groups WHERE id = ?", (device["device_group_id"],))
-        candidates.append(row["strategy_id"] if row else None)
-    candidates.append(db.setting("default_strategy_id"))
-    for sid in candidates:
-        if sid:
-            row = db.one("SELECT * FROM strategies WHERE id = ?", (sid,))
-            if row:
-                return row
-    return None
+        sid, source = (row["strategy_id"] if row else None), "device_group"
+    if not sid:
+        sid, source = db.setting("default_strategy_id"), "default"
+    if not sid:
+        return None, None
+    row = db.one("SELECT * FROM strategies WHERE id = ?", (sid,))
+    if row is None or not row["enabled"]:
+        return None, None
+    return row, source
 
 
-def strategy_stamp(strategy):
-    """The client echoes this back as modified_at; any change re-sends."""
-    if strategy is None:
-        return 0
-    digest = hashlib.sha256(f"{strategy['id']}:{strategy['modified_at']}".encode()).hexdigest()
-    return int(digest[:12], 16) or 1
+def is_blocked(db, device):
+    if device["disabled"]:
+        return True
+    if device["user_id"]:
+        row = db.one("SELECT status FROM users WHERE id = ?", (device["user_id"],))
+        return bool(row) and row["status"] == 0
+    return False
+
+
+def desired_config(db, device):
+    """(options to push, stamp) for a device. The client echoes the stamp back
+    as modified_at, so any change to it makes the server re-send."""
+    strategy, _ = effective_strategy(db, device)
+    options = loads(strategy["options"], {}) if strategy else {}
+    options = {str(k): str(v) for k, v in options.items()}
+    blocked = is_blocked(db, device)
+    if blocked:
+        options["whitelist"] = BLOCK_WHITELIST
+    if strategy is None and not blocked:
+        return options, 0
+    key = f"{strategy['id']}:{strategy['modified_at']}" if strategy else "-"
+    digest = hashlib.sha256(f"{key}:{int(blocked)}".encode()).hexdigest()
+    return options, int(digest[:12], 16) or 1
 
 
 # -- devices -------------------------------------------------------------------
@@ -149,31 +234,39 @@ def ensure_device(c, device_id, device_uuid, ip):
             c.execute("UPDATE devices SET id = ? WHERE id = ?", (device_id, moved["id"]))
             row = c.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
     if row is None:
-        c.execute("INSERT INTO devices(id, uuid, ip, created_at) VALUES (?, ?, ?, ?)",
-                  (device_id, device_uuid or "", ip, now()))
+        c.execute("INSERT INTO devices(id, guid, uuid, ip, created_at) VALUES (?, ?, ?, ?, ?)",
+                  (device_id, new_guid(), device_uuid or "", ip, now()))
         row = c.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
     return row
 
 
-def device_payload(db, row, owner_names=None, group_names=None, full=False):
-    owner = None
+def device_payload(db, row, names=None, full=False):
+    """Console/REST view of a device. `names` caches id->name lookups."""
+    names = names if names is not None else {}
+
+    def name_of(table, key):
+        if not key:
+            return None
+        cache = names.setdefault(table, {})
+        if key not in cache:
+            r = db.one(f"SELECT name FROM {table} WHERE id = ?", (key,))
+            cache[key] = r["name"] if r else None
+        return cache[key]
+
+    owner = name_of("users", row["user_id"])
+    user_group = None
     if row["user_id"]:
-        if owner_names is not None:
-            owner = owner_names.get(row["user_id"])
-        else:
-            u = db.one("SELECT name FROM users WHERE id = ?", (row["user_id"],))
-            owner = u["name"] if u else None
-    group = None
-    if row["device_group_id"]:
-        if group_names is not None:
-            group = group_names.get(row["device_group_id"])
-        else:
-            g = db.one("SELECT name FROM device_groups WHERE id = ?", (row["device_group_id"],))
-            group = g["name"] if g else None
+        g = db.one("SELECT g.name FROM users u JOIN user_groups g ON g.id = u.group_id WHERE u.id = ?",
+                   (row["user_id"],))
+        user_group = g["name"] if g else None
+    hostname = row["name_override"] or row["hostname"]
+    username = row["username_override"] or row["username"]
     data = {
+        "guid": row["guid"],
         "id": row["id"],
-        "hostname": row["hostname"],
-        "username": row["username"],
+        "hostname": hostname,
+        "device_name": hostname,
+        "username": username,
         "os": row["os"],
         "platform": platform_of(row["os"]),
         "cpu": row["cpu"],
@@ -183,18 +276,42 @@ def device_payload(db, row, owner_names=None, group_names=None, full=False):
         "note": row["note"],
         "user_id": row["user_id"],
         "user_name": owner,
+        "group_name": user_group,
         "device_group_id": row["device_group_id"],
-        "device_group_name": group,
+        "device_group_name": name_of("device_groups", row["device_group_id"]),
         "strategy_id": row["strategy_id"],
+        "strategy_name": name_of("strategies", row["strategy_id"]),
+        "status": 0 if row["disabled"] else 1,
+        "disabled": bool(row["disabled"]),
         "online": is_online(row),
         "conns": loads(row["conns"], []),
         "created_at": row["created_at"],
         "last_seen_at": row["last_seen_at"],
+        "last_online": _iso(row["last_seen_at"] or row["created_at"]),
     }
     if full:
         data["sysinfo"] = loads(row["sysinfo"], {})
         data["uuid"] = row["uuid"]
+        data["reported_hostname"] = row["hostname"]
+        data["reported_username"] = row["username"]
+        data["name_override"] = row["name_override"]
+        data["username_override"] = row["username_override"]
     return data
+
+
+def _iso(ts):
+    import datetime
+    return datetime.datetime.utcfromtimestamp(ts or 0).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def controller_of(db, peer_id):
+    """The account logged in on a controlling device, if any."""
+    if not peer_id:
+        return ""
+    row = db.one("SELECT u.name FROM tokens t JOIN users u ON u.id = t.user_id "
+                 "WHERE t.kind = 'client' AND t.device_id = ? ORDER BY t.last_seen_at DESC LIMIT 1",
+                 (peer_id,))
+    return row["name"] if row else ""
 
 
 # -- address books -------------------------------------------------------------
@@ -203,15 +320,15 @@ def personal_book(db, user_id):
     row = db.one("SELECT guid FROM address_books WHERE owner_id = ? AND personal = 1", (user_id,))
     if row:
         return row["guid"]
-    guid = str(uuid.uuid4())
     db.run("INSERT OR IGNORE INTO address_books(guid, name, owner_id, personal, created_at) "
-           "VALUES (?, 'My address book', ?, 1, ?)", (guid, user_id, now()))
+           "VALUES (?, 'My address book', ?, 1, ?)", (new_guid(), user_id, now()))
     row = db.one("SELECT guid FROM address_books WHERE owner_id = ? AND personal = 1", (user_id,))
     return row["guid"]
 
 
 def book_rule(db, user, guid, as_admin=False):
-    """Permission of user on a book: 0 none, 1 read, 2 read/write, 3 full."""
+    """Permission on a book: 0 none, 1 read, 2 read/write, 3 full control.
+    As in Pro, a user rule beats a group rule, which beats Everyone."""
     book = db.one("SELECT owner_id, personal FROM address_books WHERE guid = ?", (guid,))
     if book is None:
         return 0
@@ -221,28 +338,34 @@ def book_rule(db, user, guid, as_admin=False):
         return RULE_FULL
     if book["personal"]:
         return 0
-    row = db.one(
-        "SELECT MAX(rule) AS r FROM ab_rules WHERE guid = ? AND (user_id = ? OR user_group_id = ?)",
-        (guid, user["id"], user["group_id"] or -1),
-    )
-    return row["r"] or 0
+    for cond, params in (("user_id = ?", (user["id"],)),
+                         ("user_group_id = ?", (user["group_id"] or -1,)),
+                         ("everyone = 1", ())):
+        row = db.one(f"SELECT rule FROM ab_rules WHERE guid = ? AND {cond}", (guid,) + params)
+        if row:
+            return row["rule"]
+    return 0
 
 
 def shared_books_for(db, user):
     """Shared books the user owns or has a rule on, with the user's rule."""
-    rows = db.all(
-        """
-        SELECT b.guid, b.name, b.note, u.name AS owner,
-               CASE WHEN b.owner_id = ? THEN 3 ELSE
-                 (SELECT MAX(r.rule) FROM ab_rules r WHERE r.guid = b.guid
-                    AND (r.user_id = ? OR r.user_group_id = ?)) END AS rule
-        FROM address_books b JOIN users u ON u.id = b.owner_id
-        WHERE b.personal = 0
-        ORDER BY b.name COLLATE NOCASE
-        """,
-        (user["id"], user["id"], user["group_id"] or -1),
-    )
-    return [dict(r) for r in rows if r["rule"]]
+    rows = db.all("SELECT b.*, u.name AS owner FROM address_books b JOIN users u ON u.id = b.owner_id "
+                  "WHERE b.personal = 0 ORDER BY b.name COLLATE NOCASE")
+    books = []
+    for r in rows:
+        rule = book_rule(db, user, r["guid"])
+        if rule:
+            books.append(dict(r, rule=rule))
+    return books
+
+
+def profile_payload(book, rule):
+    """A shared book as the client's AbProfile; info.password is the book's
+    default shared password."""
+    return {
+        "guid": book["guid"], "name": book["name"], "owner": book["owner"], "note": book["note"],
+        "rule": rule, "info": {"password": book["password"]} if book["password"] else {},
+    }
 
 
 PEER_TEXT_FIELDS = ("alias", "hash", "password", "username", "hostname", "platform", "note")
@@ -267,12 +390,11 @@ def peer_payload(db, row, personal):
     for key in PEER_EXTRA_FIELDS:
         if key in extra:
             data[key] = extra[key]
-    device = db.one("SELECT hostname, username, os, device_group_id FROM devices WHERE id = ?",
-                    (row["peer_id"],))
+    device = db.one("SELECT * FROM devices WHERE id = ?", (row["peer_id"],))
     if device is not None:
         data["same_server"] = True
-        data["hostname"] = device["hostname"] or data["hostname"]
-        data["username"] = device["username"] or data["username"]
+        data["hostname"] = device["name_override"] or device["hostname"] or data["hostname"]
+        data["username"] = device["username_override"] or device["username"] or data["username"]
         data["platform"] = platform_of(device["os"]) or data["platform"]
         if device["device_group_id"]:
             g = db.one("SELECT name FROM device_groups WHERE id = ?", (device["device_group_id"],))
@@ -292,18 +414,21 @@ def clean_tags(value):
 
 
 def upsert_peer(c, guid, peer, personal, update_only=False):
-    """Insert or update a peer from client/console JSON. Returns error or None."""
+    """Insert or update a peer from client/console JSON. Returns error or None.
+    Adding a peer that is in the recycle bin restores it."""
     peer_id = str(peer.get("id") or "").strip()
     if not peer_id or len(peer_id) > 64:
         return "Invalid peer ID"
     existing = c.execute("SELECT * FROM ab_peers WHERE guid = ? AND peer_id = ?",
                          (guid, peer_id)).fetchone()
-    if existing is None and not update_only:
+    if existing is not None and existing["deleted_at"] and update_only:
+        return "Peer not found"
+    if existing is None and update_only:
+        return "Peer not found"
+    if existing is None or existing["deleted_at"]:
         values = {k: "" for k in PEER_TEXT_FIELDS}
         values["tags"] = "[]"
         values["extra"] = "{}"
-    elif existing is None:
-        return "Peer not found"
     else:
         values = {k: existing[k] for k in PEER_TEXT_FIELDS + ("tags", "extra")}
     for key in PEER_TEXT_FIELDS:
@@ -333,12 +458,19 @@ def upsert_peer(c, guid, peer, personal, update_only=False):
     else:
         c.execute(
             "UPDATE ab_peers SET alias=?, hash=?, password=?, username=?, hostname=?, platform=?, "
-            "note=?, tags=?, extra=? WHERE guid = ? AND peer_id = ?",
+            "note=?, tags=?, extra=?, deleted_at = NULL WHERE guid = ? AND peer_id = ?",
             (values["alias"], values["hash"], values["password"], values["username"],
              values["hostname"], values["platform"], values["note"], values["tags"],
              values["extra"], guid, peer_id),
         )
     return None
+
+
+def recycle_peers(c, guid, peer_ids):
+    """Deleting from a book moves entries to its recycle bin, as in Pro."""
+    for peer_id in peer_ids:
+        c.execute("UPDATE ab_peers SET deleted_at = ? WHERE guid = ? AND peer_id = ? AND deleted_at IS NULL",
+                  (now(), guid, str(peer_id)))
 
 
 def rename_tag(c, guid, old, new):
@@ -365,10 +497,19 @@ def delete_tags(c, guid, names):
 # -- console audit -------------------------------------------------------------
 
 def console_log(db, req, action, target="", detail=""):
+    actor = getattr(req, "actor", None)
     user = req.user
+    name = actor.name if actor is not None else (user["name"] if user else "")
+    typ, iop = CONSOLE_OPS.get(action, (_type_of(action), None))
     db.run(
-        "INSERT INTO console_logs(user_id, user_name, action, target, detail, ip, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (user["id"] if user else None, user["name"] if user else "", action,
-         str(target)[:256], str(detail)[:2048], req.ip, now()),
+        "INSERT INTO console_logs(user_id, user_name, action, target, detail, ip, created_at, typ, iop) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (user["id"] if user else None, name, action, str(target)[:256], str(detail)[:2048],
+         req.ip, now(), typ, iop),
     )
+
+
+def _type_of(action):
+    area = action.split(".")[0]
+    return {"user": 1, "account": 1, "device": 2, "address_book": 3, "user_group": 0,
+            "device_group": 0, "admin_role": 4}.get(area, 5)
