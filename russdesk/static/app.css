@@ -248,3 +248,21 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .split { display: flex; gap: 8px; align-items: center; }
 .checklist { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; display: grid; gap: 4px; }
 .checklist label { display: flex; gap: 8px; align-items: center; }
+
+/* v0.2 additions */
+.menu-wrap { position: relative; display: inline-block; }
+.menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 40; min-width: 170px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 4px; display: grid; }
+.menu[hidden] { display: none; }
+.menu button { border: 0; background: none; text-align: left; padding: 7px 10px; border-radius: 5px; justify-content: flex-start; }
+.menu button:hover { background: var(--panel-2); }
+.checklist-wrap { display: grid; gap: 6px; }
+.checklist label[hidden] { display: none; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.tag-filter { gap: 4px; }
+.spaced-top { margin-top: 12px; }
+.alarm-line { margin-bottom: 6px; }
+.notice { background: var(--warn-soft); color: var(--warn); padding: 8px 12px; border-radius: 6px; }
+.backup-codes { background: var(--panel-2); padding: 10px 14px; border-radius: 6px; font-size: 15px; letter-spacing: .05em; }
+.form .field > label.check { display: flex; gap: 8px; align-items: center; }
+button.link.small { padding: 0; font-size: 13px; }
+pre.mono { white-space: pre-wrap; word-break: break-word; }
