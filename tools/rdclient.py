@@ -742,8 +742,11 @@ def cmd_selftest(args):
     # Clean up the test device.
     dev.stop.set()
     if not args.keep:
-        console.call("POST", "/api/admin/devices/%s/disable" % dev.id, {}, console=True)
-        console.call("DELETE", "/api/admin/devices/%s" % dev.id, console=True)
+        time.sleep(1)  # let a last in-flight heartbeat land before deleting
+        # The client login also listed the controlling side as a device.
+        for device_id in (dev.id, ctl.my_id):
+            console.call("POST", "/api/admin/devices/%s/disable" % device_id, {}, console=True)
+            console.call("DELETE", "/api/admin/devices/%s" % device_id, console=True)
     try:
         os.remove(tmp_state)
     except OSError:
