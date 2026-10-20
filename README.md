@@ -11,21 +11,33 @@ worked out from the open-source client; see [docs/client-protocol.md](docs/clien
 
 ## What you get
 
+Modelled on RustDesk Server Pro's web console (pages, permissions, and behaviour from its
+public documentation):
+
 | | |
 | --- | --- |
-| **Devices** | Every client that checks in: online status, hostname, OS user, platform, version, CPU/RAM, IP, user, group, note. Search, filters, bulk assign/delete. |
-| **Live sessions** | Who is connected to what right now, with a **Disconnect** button. |
-| **Users and login** | Accounts for logging in from the RustDesk client, admin and normal roles, disable, sign-out everywhere, TOTP two-factor login (console and client). |
-| **Groups** | User groups and device groups. Members of a group see each other's devices in the client's *Accessible devices* tab; grant extra groups per group. |
-| **Address books** | A personal book per user plus shared books with read / read-write / full-control rules per user or group, used directly by the client's Address Book tab. Legacy single-book clients also work. |
-| **Strategies** | Push client settings (permissions, approve mode, password type, whitelists, recording, network…) to devices, by device, user, device group, or as the default. Changes reach devices within ~15 s. |
-| **Audit logs** | Connection log (who, from where, type, auth method, duration), file transfer log, security alarms, and a log of console actions. Filters and CSV export. |
-| **Recordings** | Optional upload of session recordings from clients (off by default). |
+| **Devices** | Online status, device name, OS user, platform, version, user, user group, device group, strategy, IP, note. Filters (status, groups, offline days), batch actions, edit name/username/note, **enable / disable** (disabled devices refuse all incoming connections), delete (disabled devices only, as in Pro). |
+| **Users** | Create or **invite by email**, display name, email, note, user group, strategy, enable/disable, delete (disabled only), force logout, **assign devices**, reset 2FA, **enforce 2FA**, email login verification. |
+| **Groups** | User groups with *Can access to* / *Can be accessed from* (user groups, device groups, individual users) and member lists; device groups with access rules, members and a strategy. |
+| **Admin roles** | Delegate parts of the console with Pro's permission set: *global*, *group scoped* (selected user groups, device groups, unassigned devices) or *individual*. |
+| **Strategies** | Push client settings. Enable/disable, duplicate, Edit Devices / Users / Device Groups, devices actually applied. Priority device > user > device group, as in Pro. |
+| **Address books** | My address book and shared books; share with users, groups or **everyone** (read-only / read-write / full control; user beats group beats everyone); default shared password; tags with *Untagged* and *Filter by intersection*; **import** from the device list; **recycle bin**. |
+| **Logs** | Connection (type incl. *Not Logged In*, controlled device, controlling user/device/IP, start/end/duration, authentication, editable **note**, **Disconnect**), File, Alarm (incl. login-account alarms), Console; filters and CSV export (1000 rows, following the filters). Normal users see their own logs unless *Only admin can access logs* is on. |
+| **Security** | TOTP 2FA with **6 backup codes**, email login codes, login rate limits and alarms, console audit trail. |
+| **Settings** | Server addresses and key, config string / QR / **Windows EXE name**, **SMTP** (with test mail), **API tokens**, Others (log retention, sharing policy, *Disable retrieving accessible devices*, login lifetime, recordings). |
+| **Automation** | `rustdesk --assign --token …` works, and RustDesk Server Pro's own scripts (`users.py`, `devices.py`, `user-groups.py`, `device-groups.py`, `strategies.py`, `ab.py`, `audits.py` from the RustDesk repo) run unmodified against RussDesk. CI runs all of them. |
 | **Custom client presets** | `preset-user-name`, `preset-device-group-name`, `preset-strategy-name`, `preset-address-book-*`, `preset-note` are honoured on first check-in. |
-| **Client setup** | ID server, key and a one-click config string / QR code for clients. |
 
-Not included: OIDC/LDAP login, email verification codes, the web client, the custom client
-generator, and the Pro relay/ID server features (those live in Pro's `hbbs`, not in the console).
+### Not available, and why
+
+* **Control roles** (what an operator may do inside a session): the client receives these
+  in rendezvous messages from Pro's closed-source hbbs, which the open-source hbbs and any
+  web console cannot send.
+* **Device disabling is approximated**: Pro's hbbs refuses connections to a disabled
+  device; RussDesk pushes an IP whitelist that matches nothing, so the device itself
+  refuses them. A user with access to the device's settings could undo that locally.
+* **Custom client generator**, **web client**, **OIDC/LDAP**, licences and multiple relay
+  servers with geo settings (those belong to Pro's hbbs/hbbr or RustDesk's build service).
 
 ## Works with the official RustDesk apps
 
@@ -196,7 +208,9 @@ server** to `https://your.host`, and give clients that API server. Console cooki
 * The console uses an HttpOnly, SameSite=Strict cookie plus a custom header on every
   change, and a strict Content-Security-Policy.
 * Shared address books store connection passwords in the database as plain text (the client
-  needs them back). Protect the data directory.
+  needs them back). Protect the data directory. The console only shows whether one is set.
+* API tokens are shown once at creation and stored hashed; give each the narrowest
+  permissions it needs.
 
 ## How strategies apply
 
@@ -210,7 +224,10 @@ are sent empty, which returns them to the client's default.
 ```sh
 python3 -m unittest discover -s tests            # API tests (no dependencies)
 python3 tests/ui_test.py                         # browser test, needs Playwright + Chromium
+python3 tests/pro_scripts_test.py                # Pro's management scripts, needs requests
 ```
+
+Databases from v0.1 are upgraded automatically on start (tested against a v0.1 fixture).
 
 The tests replay the request shapes of the RustDesk client. No real RustDesk client was
 used during development. If a client release changes a payload, check
