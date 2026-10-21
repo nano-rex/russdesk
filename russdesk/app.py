@@ -22,6 +22,12 @@ RECORD_BODY_LIMIT = 256 * 1024 * 1024
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 
+# The viewer runs WebAssembly (libsodium) and opens WebSockets to the hbbs/hbbr
+# ports on the server's host, which are not same-origin.
+VIEWER_CSP = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self'; "
+              "script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ws: wss:; "
+              "frame-ancestors 'none'; base-uri 'none'")
+
 
 class App:
     def __init__(self, cfg=None):
@@ -102,7 +108,11 @@ class App:
         if ctype.startswith("text/") or ctype in ("application/javascript",):
             ctype += "; charset=utf-8"
         headers = [("Cache-Control", "no-cache")]
-        if full.endswith(".html"):
+        if full.endswith("viewer.html"):
+            # The viewer needs WebAssembly (libsodium) and WebSocket to the
+            # hbbs/hbbr ports (not same-origin), so it gets a wider CSP.
+            headers += [("Content-Security-Policy", VIEWER_CSP), ("X-Frame-Options", "DENY")]
+        elif full.endswith(".html"):
             headers += [("Content-Security-Policy", CSP), ("X-Frame-Options", "DENY")]
         return Response(data, 200, ctype, headers)
 

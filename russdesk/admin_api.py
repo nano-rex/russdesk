@@ -429,6 +429,39 @@ def device_refresh(app, req, device_id):
     return json_response({"ok": True})
 
 
+def _saved_device_password(db, user, device_id):
+    """A device's connect password from a shared address book the user can read."""
+    rows = db.all("SELECT p.password, p.guid FROM ab_peers p JOIN address_books b ON b.guid = p.guid "
+                  "WHERE p.peer_id = ? AND b.personal = 0 AND p.password != '' AND p.deleted_at IS NULL",
+                  (device_id,))
+    for r in rows:
+        if models.book_rule(db, user, r["guid"]) >= RULE_READ:
+            return r["password"]
+    return None
+
+
+@router.route("GET", "/api/admin/devices/<device_id>/viewer-info")
+def viewer_info(app, req, device_id):
+    """Connection parameters for the in-browser viewer (no secrets in the URL)."""
+    actor = console_user(app, req)
+    _device(app, actor, device_id, "devices.view")
+    cfg = client_config(app, req)
+    host = cfg["host"]
+    if host.startswith("[") and "]:" in host:
+        hostname, _, port = host[1:].partition("]:")
+    elif host.count(":") == 1:
+        hostname, _, port = host.partition(":")
+    else:
+        hostname, port = host, "31116"
+    id_port = int(port) if port.isdigit() else 31116
+    return json_response({
+        "host": hostname, "id_port": id_port, "relay_port": id_port + 1,
+        "scheme": req.scheme, "key": cfg["key"], "device_id": device_id,
+        "name": actor.user["display_name"] or actor.user["name"],
+        "password": _saved_device_password(app.db, actor.user, device_id),
+    })
+
+
 @router.route("POST", "/api/admin/devices/bulk")
 def devices_bulk(app, req):
     actor = console_user(app, req)

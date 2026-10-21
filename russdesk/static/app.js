@@ -657,6 +657,9 @@ async function deviceDialog(id, reload) {
     parts.push(h("details", {}, h("summary", { class: "muted" }, "Raw system info"), h("pre", { class: "mono" }, JSON.stringify(d.sysinfo, null, 2))));
   }
   const actions = [];
+  if (d.online && !d.disabled && "VideoDecoder" in window) {
+    actions.push({ label: "Connect in browser", onClick: () => { window.open("/viewer.html?id=" + encodeURIComponent(d.id), "_blank", "noopener"); return false; } });
+  }
   if (c["devices.delete"] && d.disabled) actions.push({ label: "Delete", danger: true, onClick: () => { confirmDialog("Delete device", `Delete ${d.id}? It reappears if it checks in again, without its note or assignments.`, "Delete", async () => { await api("DELETE", "/devices/" + encodeURIComponent(d.id)); toast("Device deleted"); reload(); }); } });
   if (c["devices.enable_disable"]) {
     actions.push(d.disabled
