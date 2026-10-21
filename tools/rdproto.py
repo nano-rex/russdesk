@@ -165,6 +165,102 @@ def log(msg):
     print("%s %s" % (time.strftime("%H:%M:%S"), msg), flush=True)
 
 
+# -- transports: raw TCP (BytesCodec) or WebSocket (binary messages) -------------
+# The browser can only do WebSocket, so the viewer uses the ws path; proving it
+# here keeps the Python reference and the browser port on the same wire format.
+
+class TcpTransport:
+    def __init__(self, host, port, timeout):
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+
+    def send(self, payload):
+        self.sock.sendall(frame(payload))
+
+    def recv(self):
+        return read_frame(self.sock)
+
+    def settimeout(self, t):
+        self.sock.settimeout(t)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+class WsTransport:
+    """Minimal RFC 6455 client: each RustDesk message is one binary frame."""
+
+    def __init__(self, host, port, timeout, path="/"):
+        import base64
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.buf = b""
+        key = base64.b64encode(os.urandom(16)).decode()
+        req = ("GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+               "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n" % (path, host, port, key))
+        self.sock.sendall(req.encode())
+        while b"\r\n\r\n" not in self.buf:
+            self.buf += self.sock.recv(4096)
+        head, self.buf = self.buf.split(b"\r\n\r\n", 1)
+        if b"101" not in head.split(b"\r\n", 1)[0]:
+            raise RuntimeError("websocket upgrade failed: %r" % head[:80])
+
+    def _read(self, n):
+        while len(self.buf) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionError("websocket closed")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def send(self, payload):
+        mask = os.urandom(4)
+        masked = bytes(b ^ mask[i & 3] for i, b in enumerate(payload))
+        n = len(payload)
+        if n < 126:
+            hdr = struct.pack("!BB", 0x82, 0x80 | n)
+        elif n < 65536:
+            hdr = struct.pack("!BBH", 0x82, 0x80 | 126, n)
+        else:
+            hdr = struct.pack("!BBQ", 0x82, 0x80 | 127, n)
+        self.sock.sendall(hdr + mask + masked)
+
+    def recv(self):
+        while True:
+            b0, b1 = self._read(2)
+            opcode, length = b0 & 0x0F, b1 & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", self._read(2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", self._read(8))[0]
+            mask = self._read(4) if b1 & 0x80 else b""
+            data = self._read(length)
+            if mask:
+                data = bytes(d ^ mask[i & 3] for i, d in enumerate(data))
+            if opcode in (0x1, 0x2):   # text/binary
+                return data
+            if opcode == 0x9:          # ping -> pong
+                self.sock.sendall(struct.pack("!BB", 0x8A, 0x80 | len(data)) + os.urandom(4) + data)
+            elif opcode == 0x8:        # close
+                raise ConnectionError("websocket closed by peer")
+
+    def settimeout(self, t):
+        self.sock.settimeout(t)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def ws_port(port):
+    """hbbs 21116 -> 21118, hbbr 21117 -> 21119 (hbb_common check_ws)."""
+    return port + 2
+
+
 # -- the session -----------------------------------------------------------------
 
 class Session:
@@ -176,6 +272,7 @@ class Session:
         self.name = name
         self.verbose = verbose
         self.device_sign_pk = None
+        self.ws = False
         self.relay = None
         self.enc_key = self.dec_key = None
         self.send_seq = 0
@@ -186,15 +283,18 @@ class Session:
         if self.verbose:
             log(m)
 
+    def _transport(self, host, port, timeout):
+        return WsTransport(host, ws_port(port), timeout) if self.ws else TcpTransport(host, port, timeout)
+
     # rendezvous + relay pairing
     def _pair(self, target, timeout):
-        s = socket.create_connection((self.host, self.port), timeout=timeout)
+        s = self._transport(self.host, self.port, timeout)
         # SYMMETRIC nat + force_relay so the device always goes through hbbr.
-        s.sendall(frame(pb((RV["punch_hole_request"],
-                            pb((1, target), (2, 2), (3, self.key_str), (4, 0), (6, VERSION), (8, True))))))
+        s.send(pb((RV["punch_hole_request"],
+                   pb((1, target), (2, 2), (3, self.key_str), (4, 0), (6, VERSION), (8, True)))))
         relay_uuid = relay_server = ""
         while True:
-            name, body = _rv_msg(read_frame(s))
+            name, body = _rv_msg(s.recv())
             if name == "punch_hole_response":
                 fail = one(body, 3, 0)
                 raise RuntimeError("hbbs refused: %s" % _PUNCH.get(fail, fail))
@@ -214,16 +314,15 @@ class Session:
                 break
         s.close()
         rhost, rport = split_host(relay_server or self.host, self.port + 1)
-        self.say("hbbs paired us: relay %s:%d uuid %s" % (rhost, rport, relay_uuid))
-        relay = socket.create_connection((rhost, rport), timeout=timeout)
-        relay.sendall(frame(pb((RV["request_relay"],
-                                pb((1, target), (2, relay_uuid), (6, self.key_str))))))
+        self.say("hbbs paired us: relay %s:%d uuid %s%s" % (rhost, rport, relay_uuid, " (ws)" if self.ws else ""))
+        relay = self._transport(rhost, rport, timeout)
+        relay.send(pb((RV["request_relay"], pb((1, target), (2, relay_uuid), (6, self.key_str)))))
         relay.settimeout(timeout)
         self.relay = relay
 
     # secure handshake with the device
     def _handshake(self, target):
-        m = unpb(read_frame(self.relay))
+        m = unpb(self.relay.recv())
         signed = one(m, 3)  # Message.signed_id (field 3) -> SignedId{ id=1 bytes }
         if signed is None:
             raise RuntimeError("expected SignedId, got fields %s" % list(m))
@@ -242,7 +341,7 @@ class Session:
         session_key = os.urandom(32)
         sealed = sodium.crypto_box(session_key, NONCE, dev_pk, our_sk)
         picked = min(kx_adv, 1)
-        self.relay.sendall(frame(msg(4, pb((1, our_pk), (2, sealed), (3, picked)))))  # PublicKey
+        self.relay.send(msg(4, pb((1, our_pk), (2, sealed), (3, picked))))  # PublicKey
         if picked >= 1:
             self.enc_key = _subkey(session_key, 1, kx_adv, picked, our_pk, dev_pk)  # we are initiator
             self.dec_key = _subkey(session_key, 2, kx_adv, picked, our_pk, dev_pk)
@@ -254,10 +353,10 @@ class Session:
     def send(self, body):
         self.send_seq += 1
         cipher = sodium.crypto_secretbox(body, _nonce(self.send_seq), self.enc_key)
-        self.relay.sendall(frame(cipher))
+        self.relay.send(cipher)
 
     def recv(self):
-        cipher = read_frame(self.relay)
+        cipher = self.relay.recv()
         if len(cipher) <= 1:
             return {}
         self.recv_seq += 1
@@ -386,6 +485,7 @@ def _subkey(key, direction, advertised, picked, initiator_pk, responder_pk):
 
 def cmd_shot(args):
     s = Session(args.server, args.key, name=args.name)
+    s.ws = args.ws
     try:
         s.connect(args.target, args.password)
     except (OSError, RuntimeError, ConnectionError) as exc:
@@ -420,6 +520,7 @@ def cmd_shot(args):
 
 def cmd_info(args):
     s = Session(args.server, args.key, name=args.name)
+    s.ws = args.ws
     try:
         info = s.connect(args.target, args.password)
     except (OSError, RuntimeError, ConnectionError) as exc:
@@ -439,6 +540,7 @@ def main(argv=None):
         sp.add_argument("--key", default="", help="server public key")
         sp.add_argument("--password", required=True, help="device permanent password")
         sp.add_argument("--name", default="rdproto", help="controlling side name")
+        sp.add_argument("--ws", action="store_true", help="use WebSocket transport (:port+2), as the browser does")
         if extra:
             sp.add_argument("--out", default="shot.png")
             sp.add_argument("--frames", type=int, default=1)
