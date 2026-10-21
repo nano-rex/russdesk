@@ -64,6 +64,63 @@ pub fn alarm_type_name(t: i64) -> &'static str {
     }
 }
 
+pub fn two_factor_name(t: i64) -> &'static str {
+    match t {
+        1 => "2FA Code",
+        2 => "Trusted Device",
+        _ => "",
+    }
+}
+
+pub fn file_type_name(t: i64) -> String {
+    match t {
+        0 => "Controlling Side -> Controlled Device".to_string(),
+        1 => "Controlled Device -> Controlling Side".to_string(),
+        _ => t.to_string(),
+    }
+}
+
+pub fn console_type_name(t: i64) -> &'static str {
+    match t {
+        0 => "Group Management",
+        1 => "User Management",
+        2 => "Device Management",
+        3 => "Address Book Management",
+        4 => "Admin Role Management",
+        5 => "Settings",
+        _ => "",
+    }
+}
+
+pub fn console_op_name(iop: i64) -> &'static str {
+    match iop {
+        0 => "User Login",
+        1 => "Add Group",
+        2 => "Add User",
+        3 => "Add Device",
+        4 => "Delete Groups",
+        5 => "Disconnect Device",
+        6 => "Enable Users",
+        7 => "Disable Users",
+        8 => "Enable Devices",
+        9 => "Disable Devices",
+        10 => "Update Group",
+        11 => "Update User",
+        12 => "Update Device",
+        13 => "Delete User",
+        14 => "Delete Device",
+        15 => "Add Address Book",
+        16 => "Delete Address Book",
+        17 => "Change Address Book Name",
+        18 => "Delete Devices in the Address Book Recycle Bin",
+        19 => "Empty Address Book Recycle Bin",
+        20 => "Add Address Book Permission",
+        21 => "Delete Address Book Permission",
+        22 => "Update Address Book Permission",
+        _ => "",
+    }
+}
+
 /// Console audit category + operation for an action (models.py CONSOLE_OPS).
 pub fn console_op(action: &str) -> Option<(i64, i64)> {
     Some(match action {

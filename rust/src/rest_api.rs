@@ -200,7 +200,7 @@ fn device_by_guid(app: &App, actor: &Actor, guid: &str, perm: &str) -> HttpResul
         .ok_or_else(|| HttpError::new(404, "Device not found"))
 }
 
-fn device_set(
+pub(crate) fn device_set(
     app: &App,
     req: &Request,
     p: &Params,
@@ -300,7 +300,7 @@ fn device_assign(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
 
 // -- users --------------------------------------------------------------------
 
-fn other_admins(db: &Database, user_id: i64) -> i64 {
+pub(crate) fn other_admins(db: &Database, user_id: i64) -> i64 {
     db.query_one(
         "SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND status = 1 AND id != ?1",
         &[int(user_id)],
@@ -334,7 +334,7 @@ fn user_by_guid(app: &App, actor: &Actor, guid: &str, perm: &str) -> HttpResult<
     Ok(row)
 }
 
-fn user_set(app: &App, req: &Request, p: &Params, status: i64) -> HttpResult<Response> {
+pub(crate) fn user_set(app: &App, req: &Request, p: &Params, status: i64) -> HttpResult<Response> {
     let actor = token_actor(app, req)?;
     let row = user_by_guid(app, &actor, &guid_param(p), "users.enable_disable")?;
     if status == 0 && rbool(&row, "is_admin") && other_admins(&app.db, rint(&row, "id")) == 0 {
@@ -385,7 +385,7 @@ fn user_delete(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
     Ok(ok_empty())
 }
 
-fn group_id_by_name(db: &Database, name: &str) -> HttpResult<Option<i64>> {
+pub(crate) fn group_id_by_name(db: &Database, name: &str) -> HttpResult<Option<i64>> {
     if name.is_empty() {
         return Ok(None);
     }
@@ -396,7 +396,7 @@ fn group_id_by_name(db: &Database, name: &str) -> HttpResult<Option<i64>> {
         .ok_or_else(|| HttpError::new(400, format!("User group '{name}' not found")))
 }
 
-fn valid_username(name: &str) -> bool {
+pub(crate) fn valid_username(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name
@@ -678,7 +678,7 @@ fn users_force_logout(app: &App, req: &Request, _p: &Params) -> HttpResult<Respo
 
 // -- groups -------------------------------------------------------------------
 
-fn access_lists(db: &Database, target_type: &str, target_id: i64) -> (Vec<Value>, Vec<Value>) {
+pub(crate) fn access_lists(db: &Database, target_type: &str, target_id: i64) -> (Vec<Value>, Vec<Value>) {
     let in_rows = db
         .query(
             "SELECT a.subject_type, a.subject_id, COALESCE(g.name, u.name) AS name FROM access_rules a \
@@ -755,7 +755,7 @@ fn resolve(db: &Database, item: &Value, kinds: &[(i64, &str)]) -> HttpResult<(St
     Ok((kind.to_string(), rint(&row, "id")))
 }
 
-fn set_access(
+pub(crate) fn set_access(
     db: &Database,
     target_type: &str,
     target_id: i64,
@@ -799,7 +799,7 @@ fn set_access(
     Ok(())
 }
 
-fn group_payload(db: &Database, row: &Row, kind: &str) -> Value {
+pub(crate) fn group_payload(db: &Database, row: &Row, kind: &str) -> Value {
     let (incomings, outgoings) = access_lists(db, kind, rint(row, "id"));
     let mut data = json!({
         "guid": rstr(row, "guid"),
@@ -1086,7 +1086,7 @@ fn device_group_remove_devices(app: &App, req: &Request, p: &Params) -> HttpResu
 
 // -- strategies ---------------------------------------------------------------
 
-fn strategy_payload(db: &Database, row: &Row, full: bool) -> Value {
+pub(crate) fn strategy_payload(db: &Database, row: &Row, full: bool) -> Value {
     let mut data = json!({
         "guid": rstr(row, "guid"),
         "name": rstr(row, "name"),
@@ -1222,7 +1222,7 @@ fn strategies_assign(app: &App, req: &Request, _p: &Params) -> HttpResult<Respon
     Ok(ok_empty())
 }
 
-fn assign_strategy(
+pub(crate) fn assign_strategy(
     app: &App,
     req: &Request,
     actor: &Actor,
@@ -1292,7 +1292,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-fn audit_rows(
+pub(crate) fn audit_rows(
     app: &App,
     actor: &Actor,
     kind: &str,

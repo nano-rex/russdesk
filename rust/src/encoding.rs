@@ -62,6 +62,9 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 pub fn base64url_encode_nopad(data: &[u8]) -> String {
     b64_encode(data, B64_URL, false)
 }
+pub fn base64url_encode(data: &[u8]) -> String {
+    b64_encode(data, B64_URL, true)
+}
 
 /// Base32 (RFC 4648) without padding, uppercase.
 pub fn base32_encode_nopad(data: &[u8]) -> String {

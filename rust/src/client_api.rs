@@ -250,6 +250,82 @@ pub fn console_url(app: &App, req: &Request) -> String {
     }
 }
 
+/// The server key, from the `server_key` setting or the hbbs key file.
+pub fn hbbs_key(app: &App) -> String {
+    let key = app.db.settings().server_key;
+    if !key.is_empty() {
+        return key;
+    }
+    let path = &app.cfg.hbbs_key_file;
+    if !path.is_empty() {
+        if let Ok(data) = std::fs::read_to_string(path) {
+            return data.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+/// The API URL a client derives when its API server field is empty: the ID
+/// server's port minus 2, or 21114 when no port is given.
+pub fn derived_api(host: &str) -> String {
+    if host.is_empty() {
+        return String::new();
+    }
+    let (name, port) = if host.starts_with('[') {
+        match host.split_once("]:") {
+            Some((h, p)) => (format!("{h}]"), p.to_string()),
+            None => (host.to_string(), String::new()),
+        }
+    } else if host.matches(':').count() == 1 {
+        let (h, p) = host.split_once(':').unwrap();
+        (h.to_string(), p.to_string())
+    } else {
+        (host.to_string(), String::new())
+    };
+    let api_port = port.parse::<i64>().map(|p| p - 2).unwrap_or(21114);
+    format!("http://{name}:{api_port}")
+}
+
+/// The client configuration shown in the console (host, relay, key and the
+/// encoded strings RustDesk accepts). Port of admin_api.client_config.
+pub fn client_config(app: &App, req: &Request) -> Object {
+    let s = app.db.settings();
+    let host_header = req.header("host").unwrap_or("").trim().to_string();
+    let mut hostname = if host_header.starts_with('[') {
+        host_header
+            .split_once(']')
+            .map(|(h, _)| format!("{h}]"))
+            .unwrap_or_else(|| host_header.clone())
+    } else {
+        host_header.rsplit_once(':').map(|(h, _)| h.to_string()).unwrap_or(host_header.clone())
+    };
+    if s.id_server.is_empty() && app.cfg.id_server.is_empty() && !hostname.is_empty() {
+        // By convention hbbs listens two ports above this server.
+        hostname = format!("{hostname}:{}", app.cfg.port as i64 + 2);
+    }
+    let host = first_non_empty(&[&s.id_server, &app.cfg.id_server, &hostname]);
+    let relay = first_non_empty(&[&s.relay_server, &app.cfg.relay_server]);
+    let key = hbbs_key(app);
+    let mut config = Object::new();
+    config.insert("host".into(), Value::Str(host.clone()));
+    config.insert("relay".into(), Value::Str(relay));
+    config.insert("api".into(), Value::Str(s.api_server.clone()));
+    config.insert("key".into(), Value::Str(key));
+    let compact = crate::json::to_string(&Value::Object(config.clone()));
+    let encoded: String = crate::encoding::base64url_encode(compact.as_bytes())
+        .chars()
+        .rev()
+        .collect();
+    config.insert("config_string".into(), Value::Str(encoded.clone()));
+    config.insert("api_default".into(), Value::Str(derived_api(&host)));
+    config.insert("windows_exe".into(), Value::Str(format!("rustdesk-licensed-{encoded}.exe")));
+    config
+}
+
+fn first_non_empty(values: &[&str]) -> String {
+    values.iter().find(|v| !v.is_empty()).map(|v| v.to_string()).unwrap_or_default()
+}
+
 fn issue_client_token(app: &App, req: &Request, user: &Row, data: &Object) -> Response {
     let db = &app.db;
     let token = new_token();
@@ -1528,7 +1604,7 @@ fn ab_rules(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     Ok(json_response(&json!({ "total": total, "data": data }), 200))
 }
 
-fn check_share_target(
+pub(crate) fn check_share_target(
     app: &App,
     actor: &Actor,
     user_id: Option<i64>,
