@@ -4,7 +4,7 @@
 //! from Settings > Tokens. Port of rest_api.py.
 
 use crate::app::App;
-use crate::authz::{Actor, Scope};
+use crate::authz::Actor;
 use crate::client_api::{
     actor_from_token, api_token, apply_assignments, console_url, ok_empty, page_args,
 };

@@ -179,9 +179,6 @@ pub fn ropt_int(row: &Row, key: &str) -> Option<i64> {
 pub fn rbool(row: &Row, key: &str) -> bool {
     rint(row, key) != 0
 }
-fn rval(row: &Row, key: &str) -> Value {
-    row.get(key).cloned().unwrap_or(Value::Null)
-}
 
 // -- generic helpers ----------------------------------------------------------
 

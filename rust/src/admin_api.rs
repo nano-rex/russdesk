@@ -3,7 +3,7 @@
 use crate::app::App;
 use crate::auth;
 use crate::authz::Actor;
-use crate::client_api::{console_url, ok_empty};
+use crate::client_api::console_url;
 use crate::db::{int, now, text, Database, Row, SqlValue};
 use crate::json::{self, Object, Value};
 use crate::models::{
@@ -2444,7 +2444,7 @@ fn recording_delete(app: &App, req: &Request, p: &Params) -> HttpResult<Response
 
 // ============================ invitations ============================
 
-fn invite_info(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
+fn invite_info(app: &App, _req: &Request, p: &Params) -> HttpResult<Response> {
     let token = p.get("token").cloned().unwrap_or_default();
     let row = app.db
         .query_one(

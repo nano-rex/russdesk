@@ -10,7 +10,7 @@ use crate::db::{int, now, opt_int, text, Database, Row};
 use crate::models::{self, ropt_int, rstr, RULE_FULL, RULE_READ, RULE_READ_WRITE};
 use crate::security::{new_token, token_hash};
 use crate::web::{json_response, HttpError, HttpResult, Params, Request, Response, Router};
-use crate::{auth, mail};
+use crate::auth;
 
 const NEVER: i64 = 253402300799; // 9999-12-31
 
