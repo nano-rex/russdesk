@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RussDesk viewer</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/viewer.css">
+</head>
+<body>
+<div id="bar">
+  <span class="title" id="dev">RussDesk viewer</span>
+  <span class="status" id="status">starting…</span>
+  <span class="spacer"></span>
+  <button id="cad" title="Send Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+  <button id="full">Fullscreen</button>
+</div>
+<div id="stage"><canvas id="screen" width="1280" height="720"></canvas></div>
+<div id="overlay"><div class="card">
+  <h1 id="otitle">Connecting…</h1>
+  <p id="omsg" class="hint"></p>
+  <div id="pwbox" hidden>
+    <input id="pw" type="password" placeholder="Device password" autocomplete="off">
+    <div><button id="go">Connect</button></div>
+  </div>
+  <p class="err" id="err"></p>
+</div></div>
+<script src="/vendor/sodium.js"></script>
+<script src="/viewer.js"></script>
+<script src="/viewer-boot.js"></script>
+</body>
+</html>

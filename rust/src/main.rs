@@ -1,7 +1,8 @@
 //! RussDesk API server and web console — Rust rewrite.
 //!
-//! Rust server entry point. M4 client and token REST APIs are ported; the admin console and
-//! browser viewer remain migration milestones. See MIGRATION.md.
+//! Rust server entry point. Every Python server module is ported (client and
+//! token REST APIs, the admin console and the browser viewer's assets). See
+//! MIGRATION.md.
 
 #[macro_use]
 mod json;

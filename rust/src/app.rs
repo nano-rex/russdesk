@@ -14,6 +14,12 @@ use crate::{admin_api, client_api, rest_api};
 const CSP: &str = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
+// The viewer runs WebAssembly (libsodium) and opens WebSockets to the hbbs/hbbr
+// ports on the server's host, which are not same-origin (app.py VIEWER_CSP).
+const VIEWER_CSP: &str = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; \
+script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ws: wss:; frame-ancestors 'none'; \
+base-uri 'none'";
+
 pub struct App {
     pub cfg: Config,
     pub db: Arc<Database>,
@@ -128,7 +134,7 @@ impl App {
         let mut resp = Response::new(data, 200, &ctype).with_header("Cache-Control", "no-cache");
         if full.extension().and_then(|e| e.to_str()) == Some("html") {
             resp = resp
-                .with_header("Content-Security-Policy", CSP)
+                .with_header("Content-Security-Policy", csp_for(&full))
                 .with_header("X-Frame-Options", "DENY");
         }
         resp
@@ -169,6 +175,17 @@ impl App {
     }
 }
 
+/// Which Content-Security-Policy applies to an HTML file. The viewer gets a
+/// wider one (WebAssembly + WebSocket to the hbbs/hbbr ports), like app.py.
+fn csp_for(path: &Path) -> &'static str {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.ends_with("viewer.html") {
+        VIEWER_CSP
+    } else {
+        CSP
+    }
+}
+
 fn content_type(path: &Path) -> String {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let base = match ext {
@@ -181,6 +198,7 @@ fn content_type(path: &Path) -> String {
         "jpg" | "jpeg" => "image/jpeg",
         "ico" => "image/x-icon",
         "woff2" => "font/woff2",
+        "wasm" => "application/wasm",
         _ => "application/octet-stream",
     };
     if base.starts_with("text/") || base == "application/javascript" {
@@ -196,5 +214,47 @@ pub fn body_limit(path: &str) -> usize {
         256 * 1024 * 1024
     } else {
         2 * 1024 * 1024
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn viewer_html_gets_the_wider_csp() {
+        assert_eq!(csp_for(Path::new("/srv/static/viewer.html")), VIEWER_CSP);
+        assert!(VIEWER_CSP.contains("'wasm-unsafe-eval'"));
+        assert!(VIEWER_CSP.contains("connect-src 'self' ws: wss:"));
+    }
+
+    #[test]
+    fn other_html_gets_the_console_csp() {
+        assert_eq!(csp_for(Path::new("/srv/static/index.html")), CSP);
+        assert!(!CSP.contains("wasm-unsafe-eval"));
+    }
+
+    #[test]
+    fn viewer_assets_have_the_right_content_types() {
+        assert_eq!(
+            content_type(Path::new("viewer.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            content_type(Path::new("viewer.js")),
+            "application/javascript; charset=utf-8"
+        );
+        assert_eq!(
+            content_type(Path::new("viewer.css")),
+            "text/css; charset=utf-8"
+        );
+        assert_eq!(
+            content_type(Path::new("vendor/sodium.wasm")),
+            "application/wasm"
+        );
+        assert_eq!(
+            content_type(Path::new("vendor/sodium.js")),
+            "application/javascript; charset=utf-8"
+        );
     }
 }

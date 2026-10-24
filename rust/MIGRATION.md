@@ -38,8 +38,8 @@ everything else is implemented and reviewable in-tree:
 | `__main__.py` | 55 | `src/main.rs` | ✅ ported |
 | `client_api.py` | 976 | `src/client_api.rs` | ✅ ported (all 33 client/ab/record endpoints) |
 | `rest_api.py` | 725 | `src/rest_api.rs` | ✅ ported (token REST management API) |
-| `admin_api.py` | 1913 | — | ⬜ M5 (the console API) |
-| `tools/rdproto.py` | — | — | ⬜ M6 (browser viewer, reusing `hbb_common`) |
+| `admin_api.py` | 1913 | `src/admin_api.rs` | ✅ ported (all 84 console routes) |
+| `static/*` | — | `static/*` | ✅ ported (console + browser viewer, served with the viewer's wider CSP) |
 
 ## Milestones
 
@@ -52,14 +52,20 @@ everything else is implemented and reviewable in-tree:
   encodings, RNG, SQLite FFI and SMTP; the crate now builds with std only.
 - **M4 (done):** `client_api` and `rest_api` ported (login/heartbeat/sysinfo/audit/
   accessible lists/address books/recordings and token REST management endpoints), verified by the Rust test suite.
-- **M5:** `admin_api` (the console) — the largest module.
-- **M6:** the browser viewer (peer protocol via `hbb_common`).
+- **M5 (done):** `admin_api` — the console: users, device extras, groups,
+  strategies, address books, logs/CSV, admin roles, API tokens, recordings,
+  settings, client-config, lookup, invitations and own-account/2FA (84 routes).
+- **M6 (done):** the browser viewer — `viewer.html/css/js`, `viewer-boot.js` and
+  the vendored libsodium are served next to the console, `/viewer-info` supplies
+  the connection parameters, and the console offers *Connect in browser*.
+  The viewer itself runs in the browser (WebSocket + WebCodecs), so the same
+  assets serve both the Python and the Rust server.
 
 ## Build & run
 
 ```sh
 cd rust
-cargo test                 # 51 tests, std only
+cargo test                 # 54 tests, std only
 cargo run --release -- --host 127.0.0.1 --port 31114
 ```
 
