@@ -1,16 +1,29 @@
-FROM python:3.12-slim
+# Build the Rust server (standard library + vendored SQLite only).
+FROM rust:1.83-bookworm AS build
+WORKDIR /src
+COPY rust/ ./
+RUN cargo build --release --locked
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    RUSSDESK_DATA_DIR=/data \
-    RUSSDESK_PORT=31114
+FROM debian:bookworm-slim
+
+ENV RUSSDESK_DATA_DIR=/data \
+    RUSSDESK_PORT=31114 \
+    RUSSDESK_STATIC_DIR=/app/static
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin russdesk \
+    && mkdir -p /data /app \
+    && chown russdesk /data
+
+COPY --from=build /src/target/release/russdesk /usr/local/bin/russdesk
+COPY --from=build /src/static /app/static
 
 WORKDIR /app
-COPY russdesk ./russdesk
-RUN useradd --system --uid 10001 russdesk && mkdir -p /data && chown russdesk /data
 USER russdesk
-
 VOLUME /data
 EXPOSE 31114
-HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:31114/api/login-options', timeout=3)"
-CMD ["python", "-m", "russdesk"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["russdesk", "--healthcheck"]
+CMD ["russdesk"]

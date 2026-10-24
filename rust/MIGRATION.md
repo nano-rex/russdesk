@@ -1,10 +1,10 @@
 # Python → Rust rewrite
 
-The RussDesk server is being rewritten from Python into Rust to match the
-client's language. The rewrite lives in `rust/` and is landed in compiling,
-tested milestones. The Python server at the repo root stays the working server
-until the Rust port reaches feature + test parity, so `main` is always
-deployable and testable during the migration.
+The RussDesk server was rewritten from Python into Rust to match the client's
+language. The rewrite lives in `rust/` and is the only server: the Python
+package, tests and tooling are gone, and the installer, Dockerfile and systemd
+unit run the `russdesk` binary. The table below maps the old modules to their
+Rust replacements and records the parity work.
 
 **Zero third-party crates.** Per project policy the Rust server uses the
 standard library only. SQLite is the official single-file amalgamation vendored
@@ -41,6 +41,19 @@ everything else is implemented and reviewable in-tree:
 | `admin_api.py` | 1913 | `src/admin_api.rs` | ✅ ported (all 84 console routes) |
 | `static/*` | — | `static/*` | ✅ ported (console + browser viewer, served with the viewer's wider CSP) |
 
+## Cutover
+
+- `russdesk --reset-password USER` reads the new password from stdin, clears
+  the user's 2FA secret and signs its tokens out (the old `python -m russdesk
+  --reset-password` behavior).
+- `russdesk --healthcheck` asks `GET /api/health` on the configured port; the
+  Docker `HEALTHCHECK` and the installer's post-start check use it.
+- The static folder defaults to `static/` next to the executable, then the
+  crate's `static/` at build time; `RUSSDESK_STATIC_DIR` overrides it.
+- `.github/workflows/release.yml` builds Linux x86-64/ARM64 archives
+  (`russdesk` + `static/`) that `russdesk.sh` downloads when it is not run
+  from a checkout.
+
 ## Milestones
 
 - **M1 (done):** foundation — config, HTTP/web layer, security primitives,
@@ -59,7 +72,7 @@ everything else is implemented and reviewable in-tree:
   the vendored libsodium are served next to the console, `/viewer-info` supplies
   the connection parameters, and the console offers *Connect in browser*.
   The viewer itself runs in the browser (WebSocket + WebCodecs), so the same
-  assets serve both the Python and the Rust server.
+  assets serve the console and the viewer.
 
 ## Build & run
 

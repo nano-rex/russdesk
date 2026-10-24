@@ -25,7 +25,7 @@ public documentation):
 | **Logs** | Connection (type incl. *Not Logged In*, controlled device, controlling user/device/IP, start/end/duration, authentication, editable **note**, **Disconnect**), File, Alarm (incl. login-account alarms), Console; filters and CSV export (1000 rows, following the filters). Normal users see their own logs unless *Only admin can access logs* is on. |
 | **Security** | TOTP 2FA with **6 backup codes**, email login codes, login rate limits and alarms, console audit trail. |
 | **Settings** | Server addresses and key, config string / QR / **Windows EXE name**, **SMTP** (with test mail), **API tokens**, Others (log retention, sharing policy, *Disable retrieving accessible devices*, login lifetime, recordings). |
-| **Automation** | `rustdesk --assign --token …` works, and RustDesk Server Pro's own scripts (`users.py`, `devices.py`, `user-groups.py`, `device-groups.py`, `strategies.py`, `ab.py`, `audits.py` from the RustDesk repo) run unmodified against RussDesk. CI runs all of them. |
+| **Automation** | `rustdesk --assign --token …` works, and RustDesk Server Pro's own scripts (`users.py`, `devices.py`, `user-groups.py`, `device-groups.py`, `strategies.py`, `ab.py`, `audits.py` from the RustDesk repo) run unmodified against RussDesk. The Rust tests replay their request shapes. |
 | **Custom client presets** | `preset-user-name`, `preset-device-group-name`, `preset-strategy-name`, `preset-address-book-*`, `preset-note` are honoured on first check-in. |
 | **Custom client build** | The RustDesk client is vendored under `client/vendor`; a script and a GitHub Actions workflow bake your ID server, relay server and key in at compile time, producing an `.exe` / `.apk` that connects to your server with no manual setup. See [docs/custom-client.md](docs/custom-client.md). |
 
@@ -113,10 +113,12 @@ to run the other commands. Install options: `--host ADDR` (skip detection), `--l
 What it installs:
 
 * the official open-source `hbbs`/`hbbr` release for your CPU (x86-64, ARM64, ARMv7, i386)
-  in `/usr/local/lib/russdesk/bin`, and RussDesk in `/opt/russdesk`
+  in `/usr/local/lib/russdesk/bin`, and the RussDesk server in `/opt/russdesk`
 * a `russdesk` system user and three sandboxed systemd services, started at boot:
   `russdesk` (31114), `russdesk-hbbs` (31115/31116/31118), `russdesk-hbbr` (31117/31119)
-* a Python 3.10+ from the distribution's packages if none is present
+
+RussDesk is a Rust program with no runtime dependencies. The installer uses a checkout it is
+run from (built with `cargo`) or downloads the matching release binary; Python is not needed.
 
 All names, paths and ports are RussDesk's own, so it can run on the same machine as RustDesk
 Server Pro or the official `rustdesk-server` packages without touching them; uninstalling never
@@ -136,21 +138,21 @@ the router to the server.
 
 If a cloud firewall sits in front of the server, open TCP 31114–31119 and UDP 31116 there too.
 
-## Testing a server from a terminal
+## Checking a server from a terminal
 
-`tools/rdclient.py` (Python 3.6+, no dependencies) speaks the RustDesk protocols without the
-screen sharing: ID registration with hbbs, relayed sessions through hbbr, and the API.
+The API is plain HTTP, so `curl` is enough:
 
 ```sh
-python3 tools/rdclient.py selftest --server rd.example.com:31116          # 18 end-to-end checks
-python3 tools/rdclient.py device  --server rd.example.com:31116 --key KEY  # a fake device
-python3 tools/rdclient.py connect 123456789 --server rd.example.com:31116 --key KEY --hold 60
+curl -s http://rd.example.com:31114/api/login-options          # console settings for clients
+curl -s -X POST -d '{"id":"1","uuid":"u","modified_at":0}' \
+     http://rd.example.com:31114/api/heartbeat                 # what a device sends
+curl -s -H 'Content-Type: application/json' \
+     -d '{"username":"admin","password":"…"}' \
+     http://rd.example.com:31114/api/admin/login                # console session
 ```
 
-`selftest` registers a test device, logs in, connects to it through the relay, and checks through
-the console: the device list, live sessions, Disconnect, the connection log and note, strategy
-push and reset, disable/enable, accessible devices and the address book. It removes its test
-device afterwards.
+`russdesk --healthcheck` exits 0 when a local server answers, which is what the Docker and
+systemd checks use.
 
 ## Quick start (Docker)
 
@@ -196,10 +198,12 @@ by default. The hbbs key never expires; it only changes if you delete
 
 ## Without Docker
 
-Python 3.10+ with nothing else to install:
+A release binary (or `cargo build --release --manifest-path rust/Cargo.toml`) and nothing else:
 
 ```sh
-RUSSDESK_HBBS_KEY_FILE=/path/to/id_ed25519.pub python3 -m russdesk --data-dir ./data
+RUSSDESK_HBBS_KEY_FILE=/path/to/id_ed25519.pub ./russdesk --data-dir ./data
+# from a checkout:
+cargo run --release --manifest-path rust/Cargo.toml -- --data-dir ./data
 ```
 
 | Variable | Default | |
@@ -211,11 +215,12 @@ RUSSDESK_HBBS_KEY_FILE=/path/to/id_ed25519.pub python3 -m russdesk --data-dir ./
 | `RUSSDESK_ID_SERVER` / `RUSSDESK_RELAY_SERVER` | — | Addresses shown to clients when not set in the console's Settings. |
 | `RUSSDESK_ADMIN_USER` / `RUSSDESK_ADMIN_PASSWORD` | `admin` / random | First admin, created only on an empty database. |
 | `RUSSDESK_TRUST_PROXY` | off | Trust `X-Forwarded-For`/`-Proto` from a reverse proxy. |
+| `RUSSDESK_STATIC_DIR` | next to the binary | Web console files (`static/`). |
 
 Forgot the admin password:
 
 ```sh
-echo 'new-password-here' | python3 -m russdesk --data-dir ./data --reset-password admin
+echo 'new-password-here' | ./russdesk --data-dir ./data --reset-password admin
 ```
 
 ## Behind a reverse proxy (HTTPS)
@@ -248,20 +253,18 @@ are sent empty, which returns them to the client's default.
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests            # API tests (no dependencies)
-python3 tests/ui_test.py                         # browser test, needs Playwright + Chromium
-python3 tests/pro_scripts_test.py                # Pro's management scripts, needs requests
-python3 tools/rdclient.py selftest --server …    # a running server, end to end
+cargo test --manifest-path rust/Cargo.toml       # API, protocol, crypto and database tests
+cargo build --release --manifest-path rust/Cargo.toml
 ```
 
-Databases from v0.1 are upgraded automatically on start (tested against a v0.1 fixture).
+Databases from v0.1 are upgraded automatically on start.
 
 The tests replay the request shapes of the RustDesk client. No real RustDesk client was
 used during development. If a client release changes a payload, check
 `docs/client-protocol.md` against the client source.
 
-Layout: `russdesk/client_api.py` (what clients call), `russdesk/admin_api.py` (console API),
-`russdesk/models.py` (access rules, strategies, address books), `russdesk/static/` (the
+Layout: `rust/src/client_api.rs` (what clients call), `rust/src/admin_api.rs` (console API),
+`rust/src/models.rs` (access rules, strategies, address books), `rust/static/` (the
 console: plain HTML/CSS/JS, no build step).
 
 ## License

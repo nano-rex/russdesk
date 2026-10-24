@@ -1,0 +1,7 @@
+.git
+.github
+client
+deploy
+docs
+rust/target
+*.tar.gz

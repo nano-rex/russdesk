@@ -52,8 +52,21 @@ impl Default for Config {
 }
 
 fn default_static_dir() -> PathBuf {
-    // static/ next to the crate at build time; overridable via RUSSDESK_STATIC_DIR.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static")
+    // Next to the program when installed, else the crate at build time;
+    // RUSSDESK_STATIC_DIR overrides both.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(folder) = exe.parent() {
+            let next = folder.join("static");
+            if next.is_dir() {
+                return next;
+            }
+        }
+    }
+    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static");
+    if built.is_dir() {
+        return built;
+    }
+    PathBuf::from("static")
 }
 
 impl Config {

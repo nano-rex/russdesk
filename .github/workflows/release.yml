@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cargo build --release --locked --manifest-path rust/Cargo.toml
+          strip rust/target/release/russdesk
+
+      - name: Package
+        run: |
+          mkdir -p pkg
+          cp rust/target/release/russdesk pkg/
+          cp -R rust/static pkg/static
+          tar -czf russdesk-linux-${{ matrix.arch }}.tar.gz -C pkg .
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: russdesk-linux-${{ matrix.arch }}.tar.gz

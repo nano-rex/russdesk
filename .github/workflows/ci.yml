@@ -7,48 +7,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: API tests
-        run: python -m unittest discover -s tests -v
-
-  pro-scripts:
-    # RustDesk Server Pro's own management scripts, unmodified, against RussDesk.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install requests
-      - run: python tests/pro_scripts_test.py
-
-  ui:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install Playwright
-        run: |
-          pip install playwright==1.48.0
-          python -m playwright install --with-deps chromium
-      - name: UI test
-        run: python tests/ui_test.py
-        env:
-          UI_SHOTS: ui-shots
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ui-screenshots
-          path: ui-shots/
+      - name: Rust tests
+        run: cargo test --locked --manifest-path rust/Cargo.toml
 
   docker:
     runs-on: ubuntu-latest
@@ -59,6 +21,7 @@ jobs:
           docker build -t russdesk .
           docker run -d --name rd -p 31114:31114 -e RUSSDESK_ADMIN_PASSWORD=ci-password-1 russdesk
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:31114/api/login-options && break; sleep 1; done
+          docker exec rd russdesk --healthcheck
           curl -sf -X POST http://127.0.0.1:31114/api/heartbeat -d '{"id":"1","uuid":"u","modified_at":0}'
           docker logs rd
 
@@ -66,18 +29,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install the way the README says (script piped into sh, code fetched from GitHub)
-        run: cat russdesk.sh | sudo sh -s -- install --yes --ref "$GITHUB_SHA" --host "$(hostname -I | awk '{print $1}')" --admin-password ci-password-1
+      - name: Install the way the README says (script piped into sh, source built with cargo)
+        run: cat russdesk.sh | sudo -E sh -s -- install --yes --ref "$GITHUB_SHA" --host "$(hostname -I | awk '{print $1}')" --admin-password ci-password-1
       - name: Check services
         run: |
           sudo sh russdesk.sh status
           systemctl is-active russdesk russdesk-hbbs russdesk-hbbr
           sudo ss -ltnup | grep -E ':3111[4-9]'
-      - name: End-to-end test with the terminal client
-        run: RDCLIENT_PASSWORD=ci-password-1 python3 tools/rdclient.py selftest --server "$(hostname -I | awk '{print $1}'):31116"
+      - name: End-to-end API checks
+        run: |
+          curl -sf http://127.0.0.1:31114/api/login-options >/dev/null
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"id":"1","uuid":"u","modified_at":0}' http://127.0.0.1:31114/api/heartbeat >/dev/null
+          curl -sf -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-1"}' http://127.0.0.1:31114/api/admin/login >/dev/null
       - name: Upgrade keeps data, reset-password, uninstall, purge
         run: |
-          sudo sh russdesk.sh install --yes
+          sudo -E sh russdesk.sh install --yes
           curl -sf -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-1"}' http://127.0.0.1:31114/api/admin/login
           sudo sh russdesk.sh reset-password admin --admin-password ci-password-2
           curl -sf -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-password-2"}' http://127.0.0.1:31114/api/admin/login

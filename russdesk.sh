@@ -14,9 +14,13 @@
 #                     (default: detected when the server sits on a private network)
 #   --admin-password  first console password (default: random, printed once)
 #   --rustdesk-version V   hbbs/hbbr release to install (default: latest)
-#   --ref REF         RussDesk branch or tag to install when not run from a checkout (default: main)
+#   --ref REF         RussDesk branch or tag to build when not run from a checkout
+#                     (default: main, which downloads the latest release binary)
 #   --no-firewall     leave ufw/firewalld alone
 #   -y, --yes         do not ask questions
+#
+# RussDesk itself is the Rust server in rust/: a checkout is built with cargo,
+# otherwise the matching release binary is downloaded (no Python is used).
 #
 # Everything RussDesk creates has its own name, so it can share a machine with RustDesk
 # Server Pro or the official rustdesk-server packages:
@@ -42,6 +46,45 @@ RELAY_PORT=31117
 die() { echo "error: $*" >&2; exit 1; }
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+random_password() {  # 16 letters and digits
+    if have openssl; then
+        openssl rand -base64 24 | tr -d '/+=\n' | cut -c1-16
+    else
+        tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16
+        echo
+    fi
+}
+
+network_cidr() {  # network_cidr 192.168.1.5/24 -> 192.168.1.0/24 (IPv4)
+    cidr=$1
+    addr=${cidr%/*}
+    prefix=${cidr#*/}
+    case "$prefix" in ''|*[!0-9]*) echo "$cidr"; return ;; esac
+    set -- $(printf '%s' "$addr" | tr '.' ' ')
+    [ $# -eq 4 ] || { echo "$cidr"; return; }
+    ip=$(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 ))
+    if [ "$prefix" -eq 0 ]; then mask=0
+    else mask=$(( (4294967295 << (32 - prefix)) & 4294967295 )); fi
+    net=$(( ip & mask ))
+    echo "$(( (net >> 24) & 255 )).$(( (net >> 16) & 255 )).$(( (net >> 8) & 255 )).$(( net & 255 ))/$prefix"
+}
+
+extract_zip() {  # extract_zip ARCHIVE DIR
+    mkdir -p "$2"
+    if have unzip; then unzip -q "$1" -d "$2"; return; fi
+    if have busybox; then busybox unzip -q "$1" -d "$2"; return; fi
+    say "Installing unzip"
+    if have apt-get; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip >/dev/null
+    elif have dnf; then dnf install -y -q unzip >/dev/null
+    elif have yum; then yum install -y -q unzip >/dev/null
+    elif have zypper; then zypper -nq install unzip >/dev/null
+    elif have pacman; then pacman -Sy --noconfirm --needed unzip >/dev/null
+    elif have apk; then apk add -q unzip
+    fi
+    have unzip || die "unzip is required"
+    unzip -q "$1" -d "$2"
+}
 
 usage() { awk 'NR > 1 && /^set -eu/ { exit } NR > 1' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' ||
           echo "See https://github.com/$REPO"; }
@@ -185,34 +228,11 @@ if [ "$CMD" = status ]; then
     exit 0
 fi
 
-# -- python -----------------------------------------------------------------------
-
-find_python() {
-    for p in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
-        if have "$p" && "$p" -c 'import sys, sqlite3; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
-            command -v "$p"; return 0
-        fi
-    done
-    return 1
-}
-
-PY=$(find_python || true)
-if [ -z "$PY" ] && [ "$CMD" != reset-password ]; then
-    say "Python 3.10 or newer is needed; installing it"
-    if have apt-get; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 >/dev/null
-    elif have dnf; then dnf install -y -q python3.11 >/dev/null 2>&1 || dnf install -y -q python3 >/dev/null
-    elif have yum; then yum install -y -q python3.11 >/dev/null 2>&1 || yum install -y -q python3 >/dev/null
-    elif have zypper; then zypper -nq install python311 >/dev/null 2>&1 || zypper -nq install python3 >/dev/null
-    elif have pacman; then pacman -Sy --noconfirm --needed python >/dev/null
-    elif have apk; then apk add -q python3
-    fi
-    PY=$(find_python || true)
-    [ -n "$PY" ] || die "could not find or install Python 3.10+; install it and run again"
-fi
+# -- reset password ---------------------------------------------------------------
 
 if [ "$CMD" = reset-password ]; then
-    [ -d "$APP_DIR/russdesk" ] || die "RussDesk is not installed"
-    PY=$(find_python) || die "Python 3.10+ not found"
+    [ -x "$APP_DIR/russdesk" ] || die "RussDesk is not installed"
+    case "$RESET_USER" in *[!A-Za-z0-9_.-]*) die "invalid user name: $RESET_USER" ;; esac
     pw=$ADMIN_PASSWORD
     if [ -z "$pw" ]; then
         [ -r /dev/tty ] || die "no terminal: pass the new password with --admin-password"
@@ -222,7 +242,7 @@ if [ "$CMD" = reset-password ]; then
         stty echo < /dev/tty 2>/dev/null || true
         echo > /dev/tty
     fi
-    printf '%s\n' "$pw" | su -s /bin/sh "$SVC_USER" -c "cd $DATA_DIR && RUSSDESK_DATA_DIR=$DATA_DIR PYTHONPATH=$APP_DIR $PY -m russdesk --reset-password $RESET_USER"
+    printf '%s\n' "$pw" | su -s /bin/sh "$SVC_USER" -c "RUSSDESK_DATA_DIR=$DATA_DIR $APP_DIR/russdesk --reset-password $RESET_USER"
     exit 0
 fi
 
@@ -231,20 +251,48 @@ fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# Source: the checkout this script lives in, or a download from GitHub.
+case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64; RDESK_ARCH=x86_64 ;;
+    aarch64|arm64) ARCH=arm64v8; RDESK_ARCH=aarch64 ;;
+    armv7l|armv7*) ARCH=armv7; RDESK_ARCH=armv7 ;;
+    i386|i686) ARCH=i386; RDESK_ARCH=i686 ;;
+    *) die "no hbbs/hbbr build for $(uname -m)" ;;
+esac
+
+build_russdesk() {  # build_russdesk CHECKOUT
+    have cargo || die "cargo (Rust 1.75 or newer) is needed to build RussDesk from source: https://rustup.rs"
+    say "Building RussDesk with cargo (a few minutes)"
+    ( cd "$1/rust" && cargo build --release --locked ) || die "cargo build failed"
+    RUSSDESK_BIN="$1/rust/target/release/russdesk"
+    STATIC_SRC="$1/rust/static"
+}
+
 SRC=""
+RUSSDESK_BIN=""
+STATIC_SRC=""
 if [ -f "$0" ]; then  # run as a file (not piped): use the checkout it lives in
     here=$(cd "$(dirname "$0")" && pwd)
-    for d in "$here" "$here/.."; do [ -f "$d/russdesk/__main__.py" ] && SRC=$(cd "$d" && pwd) && break; done
+    for d in "$here" "$here/.."; do [ -f "$d/rust/Cargo.toml" ] && SRC=$(cd "$d" && pwd) && break; done
 fi
-if [ -z "$SRC" ]; then
-    say "Downloading RussDesk ($REF)"
+if [ -n "$SRC" ]; then
+    build_russdesk "$SRC"
+elif [ "$REF" = main ] && { [ "$RDESK_ARCH" = x86_64 ] || [ "$RDESK_ARCH" = aarch64 ]; } \
+     && fetch "https://github.com/$REPO/releases/latest/download/russdesk-linux-$RDESK_ARCH.tar.gz" "$TMP/russdesk.tar.gz"; then
+    say "Downloaded the RussDesk release binary ($RDESK_ARCH)"
+    mkdir -p "$TMP/pkg"
+    tar -xzf "$TMP/russdesk.tar.gz" -C "$TMP/pkg"
+    RUSSDESK_BIN="$TMP/pkg/russdesk"
+    STATIC_SRC="$TMP/pkg/static"
+else
+    say "Downloading RussDesk source ($REF)"
     fetch "https://codeload.github.com/$REPO/tar.gz/$REF" "$TMP/russdesk.tar.gz"
     mkdir "$TMP/src"
     tar -xzf "$TMP/russdesk.tar.gz" -C "$TMP/src" --strip-components=1
     SRC="$TMP/src"
+    build_russdesk "$SRC"
 fi
-[ -f "$SRC/russdesk/__main__.py" ] || die "RussDesk source not found"
+[ -x "$RUSSDESK_BIN" ] || die "the RussDesk binary was not found"
+[ -d "$STATIC_SRC" ] || die "the RussDesk static files were not found"
 
 UPGRADE=0
 [ -f "$ENV_FILE" ] && UPGRADE=1
@@ -279,19 +327,11 @@ if [ "$LAN" = auto ]; then
         MASK=$(env_value "$HBBS_ENV" MASK)
     elif is_private "${LOCAL_ADDR:-x}" && [ "$HOST" != "$LOCAL_ADDR" ]; then
         MASK=$(ip -o -4 addr show 2>/dev/null | awk -v a="$LOCAL_ADDR" '{split($4, p, "/"); if (p[1] == a) print $4}' | head -1)
-        [ -n "$MASK" ] && MASK=$("$PY" -c 'import ipaddress, sys; print(ipaddress.ip_interface(sys.argv[1]).network)' "$MASK")
+        [ -n "$MASK" ] && MASK=$(network_cidr "$MASK")
     fi
 elif [ "$LAN" != off ]; then
     MASK=$LAN
 fi
-
-case "$(uname -m)" in
-    x86_64|amd64) ARCH=amd64 ;;
-    aarch64|arm64) ARCH=arm64v8 ;;
-    armv7l|armv7*) ARCH=armv7 ;;
-    i386|i686) ARCH=i386 ;;
-    *) die "no hbbs/hbbr build for $(uname -m)" ;;
-esac
 
 say "$( [ "$UPGRADE" -eq 1 ] && echo Upgrading || echo Installing ) RussDesk for $HOST"
 
@@ -310,7 +350,7 @@ else
 fi
 say "Downloading hbbs/hbbr ($RD_VERSION, $ARCH)"
 fetch "$url" "$TMP/rd.zip"
-"$PY" -m zipfile -e "$TMP/rd.zip" "$TMP/x"
+extract_zip "$TMP/rd.zip" "$TMP/x"
 [ -f "$TMP/x/$ARCH/hbbs" ] && [ -f "$TMP/x/$ARCH/hbbr" ] || die "hbbs/hbbr missing from $url"
 systemctl stop $SERVICES 2>/dev/null || true
 install -d -m 0755 "$BIN_DIR"
@@ -319,21 +359,21 @@ install -m 0755 "$TMP/x/$ARCH/hbbs" "$TMP/x/$ARCH/hbbr" "$BIN_DIR/"
 say "Installing RussDesk to $APP_DIR"
 rm -rf "$APP_DIR.new"
 install -d -m 0755 "$APP_DIR.new"
-cp -R "$SRC/russdesk" "$APP_DIR.new/"
-[ -d "$SRC/tools" ] && cp -R "$SRC/tools" "$APP_DIR.new/"
-find "$APP_DIR.new" -name __pycache__ -prune -exec rm -rf {} +
+install -m 0755 "$RUSSDESK_BIN" "$APP_DIR.new/russdesk"
+cp -R "$STATIC_SRC" "$APP_DIR.new/static"
 chmod -R u=rwX,go=rX "$APP_DIR.new"
 rm -rf "$APP_DIR"
 mv "$APP_DIR.new" "$APP_DIR"
 
 NEW_PASSWORD=""
 if [ ! -f "$ENV_FILE" ]; then
-    [ -n "$ADMIN_PASSWORD" ] || ADMIN_PASSWORD=$("$PY" -c 'import secrets; print(secrets.token_urlsafe(12))')
+    [ -n "$ADMIN_PASSWORD" ] || ADMIN_PASSWORD=$(random_password)
     NEW_PASSWORD=$ADMIN_PASSWORD
     (umask 077; cat > "$ENV_FILE" <<EOF
 # RussDesk settings; apply with: systemctl restart russdesk
 RUSSDESK_PORT=$API_PORT
 RUSSDESK_DATA_DIR=$DATA_DIR
+RUSSDESK_STATIC_DIR=$APP_DIR/static
 RUSSDESK_HBBS_KEY_FILE=$HBBS_DIR/id_ed25519.pub
 RUSSDESK_ID_SERVER=$HOST:$ID_PORT
 # Uncomment behind an HTTPS reverse proxy:
@@ -426,9 +466,8 @@ Wants=network-online.target
 User=$SVC_USER
 Group=$SVC_USER
 EnvironmentFile=$ENV_FILE
-Environment=PYTHONPATH=$APP_DIR PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WorkingDirectory=$DATA_DIR
-ExecStart=$PY -m russdesk
+ExecStart=$APP_DIR/russdesk
 ReadWritePaths=$DATA_DIR
 $hardening
 
@@ -451,7 +490,7 @@ firewall open
 
 say "Checking the services"
 i=0
-until "$PY" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$API_PORT/api/login-options', timeout=2)" 2>/dev/null \
+until RUSSDESK_PORT=$API_PORT "$APP_DIR/russdesk" --healthcheck 2>/dev/null \
       && [ -s "$HBBS_DIR/id_ed25519.pub" ]; do
     i=$((i + 1))
     if [ $i -ge 30 ]; then
