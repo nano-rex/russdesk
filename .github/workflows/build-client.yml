@@ -47,12 +47,11 @@ env:
   NDK_VERSION: "r28c"
   CARGO_NDK_VERSION: "3.1.2"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
-  # Resolved config, inputs winning over repo vars/secrets.
+  # Resolved config, inputs winning over repo vars. (secrets can't be used in a
+  # workflow-level env, so RS_PUB_KEY / UNATTENDED_PASSWORD are set per bake step.)
   ID_SERVER: ${{ github.event.inputs.id_server || vars.RENDEZVOUS_SERVER }}
   RELAY_SERVER: ${{ github.event.inputs.relay_server || vars.RELAY_SERVER }}
   API_SERVER: ${{ github.event.inputs.api_server || vars.API_SERVER }}
-  RS_PUB_KEY: ${{ github.event.inputs.key || secrets.RS_PUB_KEY }}
-  UNATTENDED_PASSWORD: ${{ github.event.inputs.password || secrets.UNATTENDED_PASSWORD }}
 
 jobs:
   android:
@@ -62,6 +61,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Bake server config into the client
+        env:
+          RS_PUB_KEY: ${{ github.event.inputs.key || secrets.RS_PUB_KEY }}
+          UNATTENDED_PASSWORD: ${{ github.event.inputs.password || secrets.UNATTENDED_PASSWORD }}
         run: |
           test -n "$ID_SERVER" || { echo "::error::set the RENDEZVOUS_SERVER repo variable or id_server input"; exit 1; }
           test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret or key input"; exit 1; }
@@ -108,6 +110,9 @@ jobs:
 
       - name: Bake server config into the client
         shell: bash
+        env:
+          RS_PUB_KEY: ${{ github.event.inputs.key || secrets.RS_PUB_KEY }}
+          UNATTENDED_PASSWORD: ${{ github.event.inputs.password || secrets.UNATTENDED_PASSWORD }}
         run: |
           test -n "$ID_SERVER" || { echo "::error::set the RENDEZVOUS_SERVER repo variable or id_server input"; exit 1; }
           test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret or key input"; exit 1; }
