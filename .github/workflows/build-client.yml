@@ -73,17 +73,24 @@ jobs:
             --password "$UNATTENDED_PASSWORD"
 
       - uses: actions/setup-java@v4
-        with: { distribution: "temurin", java-version: "17" }
+        with:
+          distribution: temurin
+          java-version: "17"
 
       - uses: subosito/flutter-action@v2
-        with: { flutter-version: ${{ env.FLUTTER_VERSION }} }
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
 
       - uses: nttld/setup-ndk@v1
         id: ndk
-        with: { ndk-version: ${{ env.NDK_VERSION }}, add-to-path: true }
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
 
       - uses: dtolnay/rust-toolchain@master
-        with: { toolchain: ${{ env.RUST_VERSION }}, targets: "aarch64-linux-android,armv7-linux-androideabi" }
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: "aarch64-linux-android,armv7-linux-androideabi"
 
       - name: Build Rust jniLibs + APK
         working-directory: client/vendor
@@ -122,13 +129,18 @@ jobs:
             --password "$UNATTENDED_PASSWORD"
 
       - uses: subosito/flutter-action@v2
-        with: { flutter-version: ${{ env.FLUTTER_VERSION }} }
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
 
       - uses: dtolnay/rust-toolchain@master
-        with: { toolchain: ${{ env.RUST_VERSION }}, targets: "x86_64-pc-windows-msvc" }
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: "x86_64-pc-windows-msvc"
 
       - uses: lukka/run-vcpkg@v11
-        with: { vcpkgDirectory: "C:/vcpkg", vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }} }
+        with:
+          vcpkgDirectory: "C:/vcpkg"
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
 
       - name: Install vcpkg dependencies
         run: vcpkg install --triplet x64-windows-static libvpx libyuv opus aom
