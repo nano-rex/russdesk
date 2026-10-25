@@ -393,16 +393,50 @@ fn devices(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
 
 fn device_detail(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
     let (actor, _) = console_user(app, req)?;
-    let row = device_where(
-        app,
-        &actor,
-        p.get("device_id").map(String::as_str).unwrap_or(""),
-        "devices.view",
-    )?;
-    Ok(json_response(
-        &models::device_payload(&app.db, &row, true),
-        200,
-    ))
+    let device_id = p.get("device_id").map(String::as_str).unwrap_or("");
+    let row = device_where(app, &actor, device_id, "devices.view")?;
+    let mut data = models::device_payload(&app.db, &row, true);
+
+    let (strategy, source) = models::effective_strategy(&app.db, &row);
+    data["effective_strategy"] = match &strategy {
+        Some(s) => Value::from(rstr(s, "name")),
+        None => Value::Null,
+    };
+    data["effective_strategy_source"] = match source {
+        Some(s) => Value::from(s),
+        None => Value::Null,
+    };
+    data["blocked"] = Value::Bool(models::is_blocked(&app.db, &row));
+
+    // Per-actor capabilities the console's device dialog reads via `d.can`.
+    let mut can = crate::json::Object::new();
+    for &(perm, _, _) in crate::authz::PERMISSIONS.iter() {
+        if perm.starts_with("devices.") {
+            can.insert(perm.to_string(), Value::Bool(actor.can(&app.db, perm)));
+        }
+    }
+    can.insert("disconnect".to_string(), Value::Bool(actor.can(&app.db, "audits.edit")));
+    data["can"] = Value::Object(can);
+
+    if actor.can(&app.db, "audits.view") {
+        let (_table, sql, mut params) = crate::rest_api::audit_rows(app, &actor, "conn", req)?;
+        params.push(text(device_id));
+        params.push(text(device_id));
+        let recent: Vec<Value> = app
+            .db
+            .query(
+                &format!("SELECT * FROM conn_logs WHERE {sql} AND (device_id = ? OR peer_id = ?) ORDER BY id DESC LIMIT 20"),
+                &params,
+            )?
+            .iter()
+            .map(|r| conn_log_row(&app.db, r))
+            .collect();
+        data["recent_connections"] = Value::Array(recent);
+    } else {
+        data["recent_connections"] = Value::Array(Vec::new());
+    }
+
+    Ok(json_response(&data, 200))
 }
 
 fn device_update(app: &App, req: &Request, p: &Params) -> HttpResult<Response> {
