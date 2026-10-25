@@ -159,8 +159,15 @@ class Viewer {
     this.sodium = window.sodium;
     await this.sodium.ready;
     this.serverPk = this.sodium.from_base64(this.cfg.key, this.sodium.base64_variants.ORIGINAL);
-    const wsScheme = this.cfg.scheme === "https" ? "wss" : "ws";
-    const hostFor = (p) => `${wsScheme}://${this.cfg.host}:${p + 2}`;
+    const secure = this.cfg.scheme === "https";
+    const wsScheme = secure ? "wss" : "ws";
+    // Over HTTPS the browser blocks plain ws:// (mixed content) and the hbbs/hbbr
+    // ws ports have no TLS, so route through the console origin, which a TLS proxy
+    // forwards to hbbs (/ws/id) and hbbr (/ws/relay). Plain HTTP keeps talking to
+    // the ID/relay host directly on port+2.
+    const hostFor = (p) => secure
+      ? `${wsScheme}://${location.host}/ws/${p === this.cfg.relay_port ? "relay" : "id"}`
+      : `${wsScheme}://${this.cfg.host}:${p + 2}`;
 
     this.status("contacting ID server…");
     const uuid = await this._pair(hostFor(this.cfg.id_port));
