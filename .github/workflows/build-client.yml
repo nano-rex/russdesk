@@ -1,22 +1,27 @@
 name: Build custom client
 
 # Builds a RustDesk client from client/vendor with your self-hosted ID server,
-# relay server and public key baked in, so the resulting .exe / .apk connects to
-# your server with no manual setup. Toolchain versions mirror RustDesk 1.5.0's
-# own CI (see client/vendor/.github/workflows/flutter-build.yml).
+# relay server, public key — and, with a password, unattended access — baked in,
+# so the resulting .exe / .apk connects to your server with no manual setup and
+# the console can connect without the remote user accepting. Toolchain versions
+# mirror RustDesk 1.5.0's own CI (client/vendor/.github/workflows/flutter-build.yml).
 #
-# Configure once, then run from the Actions tab (workflow_dispatch):
-#   - Repo variable  RENDEZVOUS_SERVER   e.g. rd.example.com:21116   (required)
-#   - Repo secret    RS_PUB_KEY          contents of hbbs' id_ed25519.pub (required)
-#   - Repo variable  RELAY_SERVER        optional, e.g. rd.example.com:21117
-#   - Repo variable  API_SERVER          optional, e.g. https://rd.example.com
-# Any of these can be overridden per-run with the inputs below.
+# Configure once (Actions tab, Run workflow), or set repo-level defaults:
+#   - Variable RENDEZVOUS_SERVER  e.g. rd.example.com:21116   (or the id_server input)
+#   - Secret   RS_PUB_KEY         hbbs' id_ed25519.pub        (or the key input)
+#   - Variable RELAY_SERVER / API_SERVER                       optional
+#   - Secret   UNATTENDED_PASSWORD  shared permanent password  (or the password input)
+# Inputs win over repo vars/secrets. Only the password's hash is baked into the
+# binary, so publishing the client (even publicly) does not expose the password.
 
 on:
   workflow_dispatch:
     inputs:
       id_server:
-        description: "ID/rendezvous server host:port (overrides the RENDEZVOUS_SERVER variable)"
+        description: "ID/rendezvous server host:port (overrides RENDEZVOUS_SERVER)"
+        required: false
+      key:
+        description: "hbbs public key (overrides the RS_PUB_KEY secret)"
         required: false
       relay_server:
         description: "Relay server host:port (overrides RELAY_SERVER)"
@@ -24,11 +29,17 @@ on:
       api_server:
         description: "API server URL (overrides API_SERVER)"
         required: false
+      password:
+        description: "Shared unattended permanent password (overrides UNATTENDED_PASSWORD). Empty = no unattended access."
+        required: false
       targets:
         description: "What to build"
         type: choice
         default: "android+windows"
         options: ["android+windows", "android", "windows"]
+
+permissions:
+  contents: write  # create/update the GitHub Release for the Windows client
 
 env:
   RUST_VERSION: "1.75"
@@ -40,7 +51,8 @@ env:
   ID_SERVER: ${{ github.event.inputs.id_server || vars.RENDEZVOUS_SERVER }}
   RELAY_SERVER: ${{ github.event.inputs.relay_server || vars.RELAY_SERVER }}
   API_SERVER: ${{ github.event.inputs.api_server || vars.API_SERVER }}
-  RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+  RS_PUB_KEY: ${{ github.event.inputs.key || secrets.RS_PUB_KEY }}
+  UNATTENDED_PASSWORD: ${{ github.event.inputs.password || secrets.UNATTENDED_PASSWORD }}
 
 jobs:
   android:
@@ -52,10 +64,11 @@ jobs:
       - name: Bake server config into the client
         run: |
           test -n "$ID_SERVER" || { echo "::error::set the RENDEZVOUS_SERVER repo variable or id_server input"; exit 1; }
-          test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret"; exit 1; }
+          test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret or key input"; exit 1; }
           python3 client/configure_client.py \
             --id-server "$ID_SERVER" --key "$RS_PUB_KEY" \
-            --relay "$RELAY_SERVER" --api-server "$API_SERVER"
+            --relay "$RELAY_SERVER" --api-server "$API_SERVER" \
+            --password "$UNATTENDED_PASSWORD"
 
       - uses: actions/setup-java@v4
         with: { distribution: "temurin", java-version: "17" }
@@ -97,10 +110,11 @@ jobs:
         shell: bash
         run: |
           test -n "$ID_SERVER" || { echo "::error::set the RENDEZVOUS_SERVER repo variable or id_server input"; exit 1; }
-          test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret"; exit 1; }
+          test -n "$RS_PUB_KEY" || { echo "::error::set the RS_PUB_KEY repo secret or key input"; exit 1; }
           python3 client/configure_client.py \
             --id-server "$ID_SERVER" --key "$RS_PUB_KEY" \
-            --relay "$RELAY_SERVER" --api-server "$API_SERVER"
+            --relay "$RELAY_SERVER" --api-server "$API_SERVER" \
+            --password "$UNATTENDED_PASSWORD"
 
       - uses: subosito/flutter-action@v2
         with: { flutter-version: ${{ env.FLUTTER_VERSION }} }
@@ -121,9 +135,38 @@ jobs:
           VCPKG_ROOT: "C:/vcpkg"
         run: |
           flutter pub get
-          python build.py --flutter
+          python build.py --portable --flutter --skip-portable-pack
+
+      - name: Package single-file portable exe
+        working-directory: client/vendor
+        shell: bash
+        run: |
+          mv ./flutter/build/windows/x64/runner/Release ./rustdesk
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          popd
+          mkdir -p dist
+          host=$(printf '%s' "$ID_SERVER" | sed 's#^[a-z]*://##; s#[:/].*##')
+          mv ./target/release/rustdesk-portable-packer.exe "./dist/russdesk-${host}-windows-x64.exe"
+          ( cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt )
 
       - uses: actions/upload-artifact@v4
         with:
           name: rustdesk-windows-custom
-          path: client/vendor/build/windows/x64/runner/Release/rustdesk.exe
+          path: client/vendor/dist/*
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-client
+          name: Windows client (custom)
+          body: |
+            Preconfigured RussDesk Windows client (portable, single exe).
+            Connects to the baked-in ID server automatically; unattended access
+            is enabled when the build set a shared password. Built from
+            ${{ github.sha }}.
+          files: |
+            client/vendor/dist/russdesk-*-windows-x64.exe
+            client/vendor/dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true

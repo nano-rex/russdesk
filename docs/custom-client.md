@@ -19,6 +19,31 @@ Only the ID server and key are needed for a client that "just works"; the relay
 is handed to clients by hbbs during connection setup, so set it only if you want
 an explicit default.
 
+## Unattended access (no accept prompt)
+
+By default RustDesk makes the controlled side click **Accept** or read out a
+rotating temporary password. To ship a client the console can connect to with no
+interaction, pass a shared permanent password:
+
+```sh
+python3 client/configure_client.py --id-server rd.example.com:21116 \
+    --key "$(cat id_ed25519.pub)" --password 'a-strong-shared-secret'
+```
+
+That bakes `approve-mode=password` and `verification-method=use-permanent-password`
+into `DEFAULT_SETTINGS`, and the password into `HARD_SETTINGS` as RustDesk's
+preset permanent password — **as a SHA256 hash, never the plaintext**, so the
+binary (even a public release) does not reveal the password. The console/viewer
+connects with that one password; the remote user does nothing. In CI set it as
+the `UNATTENDED_PASSWORD` secret or the `password` workflow input.
+
+## Where the Windows build goes
+
+The `windows` job of `build-client.yml` packages a single-file portable `.exe`
+and publishes it to the repo's **GitHub Releases** under the `windows-client`
+tag (plus a `SHA256SUMS.txt`). The `android` job uploads the `.apk` as a build
+artifact.
+
 > The generated client is an ordinary, unmodified RustDesk client: it shows its
 > normal UI and connection indicator and honours the usual accept / permanent-
 > password model. Only the default server address and key are pre-filled.
