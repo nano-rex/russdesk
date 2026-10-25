@@ -252,13 +252,111 @@ fn dashboard(app: &App, req: &Request, _p: &Params) -> HttpResult<Response> {
     let scope = actor.require(&app.db, "devices.view")?;
     let (cond, params) = scope.device_sql("d");
     let cutoff = now() - ONLINE_SECONDS;
-    let mut args: Vec<SqlValue> = params.into_iter().map(SqlValue::Int).collect();
+
+    let mut args: Vec<SqlValue> = params.iter().copied().map(SqlValue::Int).collect();
     args.push(SqlValue::Int(cutoff));
     let row = app.db.query_one(&format!("SELECT COUNT(*) AS total, SUM(d.last_seen_at >= ?{}) AS online, SUM(d.disabled = 1) AS disabled FROM devices d WHERE {cond}", args.len()), &args)?.unwrap_or_default();
-    Ok(json_response(
-        &json!({"devices_total":rint(&row,"total"),"devices_online":rint(&row,"online"),"devices_disabled":rint(&row,"disabled")}),
-        200,
-    ))
+
+    // Device counts by platform (the console renders this unconditionally).
+    let pargs: Vec<SqlValue> = params.iter().copied().map(SqlValue::Int).collect();
+    let mut counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for r in app
+        .db
+        .query(&format!("SELECT os FROM devices d WHERE {cond}"), &pargs)?
+        .iter()
+    {
+        let name = {
+            let p = models::platform_of(&rstr(r, "os"));
+            if p.is_empty() { "Unknown".to_string() } else { p }
+        };
+        *counts.entry(name).or_insert(0) += 1;
+    }
+    let mut platforms = crate::json::Object::new();
+    for (k, v) in counts {
+        platforms.insert(k, Value::Int(v));
+    }
+
+    let mut data = json!({
+        "devices_total": rint(&row, "total"),
+        "devices_online": rint(&row, "online"),
+        "devices_disabled": rint(&row, "disabled"),
+    });
+    data["platforms"] = Value::Object(platforms);
+    data["active_sessions"] = Value::Array(Vec::new());
+
+    let day = now() - 86400;
+    if actor.can(&app.db, "audits.view") {
+        let (ctable, csql, cparams) = crate::rest_api::audit_rows(app, &actor, "conn", req)?;
+
+        let mut sargs: Vec<SqlValue> = vec![SqlValue::Int(cutoff)];
+        sargs.extend(cparams.iter().cloned());
+        let sessions: Vec<Value> = app
+            .db
+            .query(
+                &format!("SELECT l.* FROM conn_logs l JOIN devices dd ON dd.id = l.device_id WHERE l.ended_at IS NULL AND dd.last_seen_at >= ? AND l.id IN (SELECT id FROM {ctable} WHERE {csql}) ORDER BY l.started_at DESC"),
+                &sargs,
+            )?
+            .iter()
+            .map(|r| conn_log_row(&app.db, r))
+            .collect();
+        data["active_sessions"] = Value::Array(sessions);
+
+        let mut c24 = cparams.clone();
+        c24.push(SqlValue::Int(day));
+        let n = app
+            .db
+            .query_one(&format!("SELECT COUNT(*) AS n FROM conn_logs WHERE {csql} AND started_at >= ?"), &c24)?
+            .map(|r| rint(&r, "n"))
+            .unwrap_or(0);
+        data["connections_24h"] = Value::Int(n);
+
+        let (_atable, asql, aparams) = crate::rest_api::audit_rows(app, &actor, "alarm", req)?;
+        let mut a24 = aparams.clone();
+        a24.push(SqlValue::Int(day));
+        let an = app
+            .db
+            .query_one(&format!("SELECT COUNT(*) AS n FROM alarm_logs WHERE {asql} AND created_at >= ?"), &a24)?
+            .map(|r| rint(&r, "n"))
+            .unwrap_or(0);
+        data["alarms_24h"] = Value::Int(an);
+
+        let start = (now() / 86400 - 13) * 86400;
+        let mut cbd = cparams.clone();
+        cbd.push(SqlValue::Int(start));
+        let mut per_day: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        for r in app
+            .db
+            .query(&format!("SELECT started_at / 86400 AS d, COUNT(*) AS n FROM conn_logs WHERE {csql} AND started_at >= ? GROUP BY d"), &cbd)?
+            .iter()
+        {
+            per_day.insert(rint(r, "d"), rint(r, "n"));
+        }
+        let by_day: Vec<Value> = (0..14)
+            .map(|i| {
+                let d = start / 86400 + i;
+                json!({"day": d * 86400, "count": per_day.get(&d).copied().unwrap_or(0)})
+            })
+            .collect();
+        data["connections_by_day"] = Value::Array(by_day);
+
+        let recent: Vec<Value> = app
+            .db
+            .query(&format!("SELECT * FROM alarm_logs WHERE {asql} ORDER BY id DESC LIMIT 5"), &aparams)?
+            .iter()
+            .map(|r| alarm_log_row(&app.db, r))
+            .collect();
+        data["recent_alarms"] = Value::Array(recent);
+    }
+    if actor.can(&app.db, "users.view") {
+        let un = app
+            .db
+            .query_one("SELECT COUNT(*) AS n FROM users", &[])?
+            .map(|r| rint(&r, "n"))
+            .unwrap_or(0);
+        data["users_total"] = Value::Int(un);
+    }
+
+    Ok(json_response(&data, 200))
 }
 
 fn device_where(app: &App, actor: &Actor, id: &str, perm: &str) -> HttpResult<Row> {
