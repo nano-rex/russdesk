@@ -72,28 +72,59 @@ are pinned to match RustDesk 1.5.0's own CI.
 
 ## Build locally
 
-On a machine already set up to build RustDesk (Rust 1.75, Flutter 3.24.5, and —
-for Android — the NDK `r28c` with `ANDROID_NDK_HOME` set):
+`client/build-client.sh` builds one or more targets; each has to be built on
+its own kind of host:
+
+| Target | Output in `client/dist/` | Build host |
+| --- | --- | --- |
+| `windows` | `russdesk-<host>-windows-x64.exe` (portable, single file) | Windows — `build-client.ps1`, or the `.sh` from Git Bash |
+| `android` | `russdesk-<host>-android-arm64-v8a.apk`, `…-armeabi-v7a.apk` | Linux or macOS (Windows via `.ps1` + Git Bash) |
+| `macos` | `russdesk-<host>-macos-<arch>.dmg` (unsigned) | macOS |
+| `ios` (alias `iphone`) | `russdesk-<host>-ios-unsigned.ipa` | macOS with Xcode |
+| `linux` | `russdesk-<host>-linux-<arch>.tar.gz` (Flutter bundle) | Linux |
+
+All targets need Rust 1.75, Flutter 3.24.5, Python 3 and `VCPKG_ROOT` pointing
+at a vcpkg checkout (the script installs the vcpkg packages it needs from
+`client/vendor/vcpkg.json`). The first build also generates the
+flutter_rust_bridge glue, which needs:
+
+```sh
+cargo install cargo-expand --version 1.0.95 --locked
+cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+```
+
+Per-target extras: Visual Studio 2022 C++ tools + LLVM (windows); Java 17,
+NDK `r28c` in `ANDROID_NDK_HOME` and `cargo-ndk` (android); Xcode + CocoaPods
+(macos, ios). `--help` lists everything.
 
 ```sh
 RENDEZVOUS_SERVER=rd.example.com:21116 RS_PUB_KEY="$(cat id_ed25519.pub)" \
-    client/build-client.sh android      # or: windows | linux
-client/build-client.sh --help           # all options (--relay, --api-server, --password, --check)
+    client/build-client.sh android linux
+client/build-client.sh --id-server rd.example.com:21116 --key 'KEY=' \
+    --password 'a-strong-shared-secret' macos ios        # on a Mac
+client/build-client.sh --help
 ```
 
-On Windows, use the PowerShell script (also needs Visual Studio 2022 C++ build
-tools and vcpkg with `libvpx libyuv opus aom` for `x64-windows-static`, with
-`VCPKG_ROOT` set). It builds the same single-file portable exe as CI:
+On Windows, use the PowerShell script (targets `windows`, `android`):
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass   # if scripts are blocked
-.\client\build-client.ps1 -IdServer rd.example.com:21116 -Key (Get-Content id_ed25519.pub) `
-    -Password 'a-strong-shared-secret'      # -Target android also works (needs Git Bash)
+.\client\build-client.ps1 windows -IdServer rd.example.com:21116 -Key (Get-Content id_ed25519.pub) `
+    -Password 'a-strong-shared-secret'
 Get-Help .\client\build-client.ps1 -Detailed   # or: .\client\build-client.ps1 -Help
 ```
 
-Artifacts are copied to `client/dist/`. The script re-bakes `config.rs` from a
-clean checkout each run, so it is safe to build repeatedly with different values.
+Notes:
+
+- macOS and iOS builds are unsigned. On macOS, right-click → Open the first
+  time (or `xattr -dr com.apple.quarantine /Applications/RustDesk.app`), and
+  grant Screen Recording + Accessibility to be controlled. The `.ipa` has to be
+  re-signed (Xcode, AltStore, Sideloadly) before it installs. iOS doesn't allow
+  being remote-controlled, so an iPhone client can only control other devices.
+- Without `flutter/android/key.properties` the APKs are signed with the debug
+  key, as in RustDesk's CI.
+- The script re-bakes `config.rs` from a clean checkout each run, so it is safe
+  to build repeatedly with different values.
 
 ## Just the config step
 
