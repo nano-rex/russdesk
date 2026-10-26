@@ -105,7 +105,9 @@ client/build-client.sh --id-server rd.example.com:21116 --key 'KEY=' \
 client/build-client.sh --help
 ```
 
-On Windows, use the PowerShell script (targets `windows`, `android`):
+On Windows, use the PowerShell script (targets `windows`, `android`). It takes
+PowerShell-style `-Target`/`-IdServer`/`-Key`… and also the same `--target`/
+`--id-server`/`--key`… flags as the shell script:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass   # if scripts are blocked

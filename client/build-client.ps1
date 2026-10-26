@@ -29,7 +29,8 @@
     or GET /api/admin/client-config.
 
 .PARAMETER Target
-    What to build, comma-separated (-Target windows,android). One or more of: windows (default), android. Also accepts macos, ios,
+    What to build, comma-separated: -Target windows,android (or --target).
+    One or more of: windows (default), android. Also accepts macos, ios,
     iphone, linux only to tell you to use build-client.sh on that host.
 
 .PARAMETER IdServer
@@ -57,11 +58,17 @@
 .PARAMETER Help
     Show this help and exit.
 
+    The build-client.sh spellings work too: --target, -t, --id-server, --key,
+    --relay, --api-server, --password, --regen-bridge, --check, --help.
+
 .EXAMPLE
     .\client\build-client.ps1 -IdServer rd.example.com:31116 -Key (Get-Content id_ed25519.pub)
 
 .EXAMPLE
     .\client\build-client.ps1 -Target windows,android -IdServer rd.example.com:31116 -Key 'KEY=' -Password 'a-strong-shared-secret'
+
+.EXAMPLE
+    .\client\build-client.ps1 --target windows --id-server rd.example.com:31116 --key 'KEY='
 
 .EXAMPLE
     $env:RENDEZVOUS_SERVER = 'rd.example.com:31116'; $env:RS_PUB_KEY = 'KEY='
@@ -73,7 +80,6 @@
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [ValidateSet('windows', 'android', 'macos', 'ios', 'iphone', 'linux')]
     [string[]]$Target = @('windows'),
     [string]$IdServer = $env:RENDEZVOUS_SERVER,
     [string]$Key = $env:RS_PUB_KEY,
@@ -83,10 +89,50 @@ param(
     [switch]$RegenBridge,
     [switch]$Check,
     [Alias('h')]
-    [switch]$Help
+    [switch]$Help,
+    # Anything else: build-client.sh-style --flags, parsed below.
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [object[]]$ShArgs
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Fail([string]$Message, [int]$Code = 1) {
+    Write-Host "error: $Message" -ForegroundColor Red
+    exit $Code
+}
+
+# Accept the same --flags as build-client.sh, so one command line works for both.
+# An unquoted list like `--target windows,android` arrives as an array, so values
+# are flattened and split on commas.
+if ($ShArgs) {
+    $shTargets = @()
+    $i = 0
+    while ($i -lt $ShArgs.Count) {
+        $flag = [string]$ShArgs[$i]
+        $takesValue = $flag -in '--target', '-t', '--id-server', '--key', '--relay', '--api-server', '--password'
+        if ($takesValue) {
+            if ($i + 1 -ge $ShArgs.Count) { Fail "$flag needs a value (see -Help)" 2 }
+            $value = @($ShArgs[$i + 1])
+            $i += 2
+        } else {
+            $i += 1
+        }
+        switch ($flag) {
+            { $_ -in '--target', '-t' } { $shTargets += @($value | ForEach-Object { "$_" -split ',' } | Where-Object { $_ }) }
+            '--id-server' { $IdServer = [string]$value[0] }
+            '--key' { $Key = [string]$value[0] }
+            '--relay' { $Relay = [string]$value[0] }
+            '--api-server' { $ApiServer = [string]$value[0] }
+            '--password' { $Password = [string]$value[0] }
+            '--regen-bridge' { $RegenBridge = [switch]$true }
+            '--check' { $Check = [switch]$true }
+            '--help' { $Help = [switch]$true }
+            default { Fail "unexpected argument: $flag (choose targets with -Target or --target; see -Help)" 2 }
+        }
+    }
+    if ($shTargets.Count -gt 0) { $Target = $shTargets }
+}
 
 if ($Help) {
     Get-Help $PSCommandPath -Detailed
@@ -102,11 +148,6 @@ $Dist = Join-Path $Here 'dist'
 $FrbVersion = '1.80.1'
 $CargoExpandVersion = '1.0.95'
 
-function Fail([string]$Message, [int]$Code = 1) {
-    Write-Host "error: $Message" -ForegroundColor Red
-    exit $Code
-}
-
 function Need([string]$Command, [string]$For) {
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
         Fail "'$Command' is required for target '$For' but was not found"
@@ -120,7 +161,16 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { Fail "'$Exe $($Arguments -join ' ')' failed (exit $LASTEXITCODE)" $LASTEXITCODE }
 }
 
-$Targets = @($Target | ForEach-Object { if ($_ -eq 'iphone') { 'ios' } else { $_ } } | Select-Object -Unique)
+$Targets = @($Target | ForEach-Object { "$_" -split ',' } | Where-Object { $_ } | ForEach-Object {
+    switch ($_.ToLower()) {
+        { $_ -in 'windows', 'win' } { 'windows' }
+        'android' { 'android' }
+        { $_ -in 'macos', 'mac', 'osx' } { 'macos' }
+        { $_ -in 'ios', 'iphone', 'ipad' } { 'ios' }
+        'linux' { 'linux' }
+        default { Fail "unknown target: $_ (windows|android|macos|ios|linux; see -Help)" 2 }
+    }
+} | Select-Object -Unique)
 $notHere = @($Targets | Where-Object { $_ -in 'macos', 'ios', 'linux' })
 if ($notHere.Count -gt 0) {
     Fail ("target(s) $($notHere -join ', ') can't be built on Windows: run client/build-client.sh " +
