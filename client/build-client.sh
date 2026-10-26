@@ -199,8 +199,16 @@ vcpkg_install() {
 
 # The Rust<->Dart glue (src/bridge_generated*.rs, flutter/lib/generated_bridge*.dart)
 # is generated, not vendored; every target needs it to compile.
+# When libclang can't find the C headers (stdbool.h, stdint.h), ffigen still
+# "succeeds" but mistypes bool/int64_t, and the Dart build fails much later. The
+# telltale is a generated `typedef bool = ...` shadowing Dart's bool.
+bridge_ok() {
+  [ -f src/bridge_generated.rs ] && [ -f flutter/lib/generated_bridge.dart ] \
+    && ! grep -q '^typedef bool ' flutter/lib/generated_bridge.dart
+}
+
 gen_bridge() {
-  if [ "$REGEN_BRIDGE" -eq 0 ] && [ -f src/bridge_generated.rs ] && [ -f flutter/lib/generated_bridge.dart ]; then
+  if [ "$REGEN_BRIDGE" -eq 0 ] && bridge_ok; then
     return
   fi
   if ! command -v flutter_rust_bridge_codegen >/dev/null 2>&1 || ! command -v cargo-expand >/dev/null 2>&1; then
@@ -218,6 +226,7 @@ EOF
     --dart-output ./flutter/lib/generated_bridge.dart \
     --c-output ./flutter/macos/Runner/bridge_generated.h
   cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+  bridge_ok || { echo "error: the generated bridge mistypes bool/int64_t: libclang couldn't find the C headers (stdbool.h, stdint.h)" >&2; exit 1; }
 }
 
 # Load the MSVC developer environment (INCLUDE/LIB/LIBPATH) from the Visual
@@ -353,6 +362,8 @@ fi
 
 mkdir -p "$DIST"
 cd "$VENDOR"
+# The bridge generator's libclang needs the MSVC/Windows SDK headers too.
+if [ "$HOST_OS" = windows ]; then msvc_env; fi
 gen_bridge
 
 for t in "${TARGETS[@]}"; do

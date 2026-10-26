@@ -228,9 +228,16 @@ function Install-VcpkgDeps([string]$Triplet) {
 
 # The Rust<->Dart glue (src\bridge_generated*.rs, flutter\lib\generated_bridge*.dart)
 # is generated, not vendored; every target needs it to compile.
+# When libclang can't find the C headers (stdbool.h, stdint.h), ffigen still
+# "succeeds" but mistypes bool/int64_t, and the Dart build fails much later. The
+# telltale is a generated `typedef bool = ...` shadowing Dart's bool.
+function Test-Bridge {
+    (Test-Path .\src\bridge_generated.rs) -and (Test-Path .\flutter\lib\generated_bridge.dart) -and
+        -not (Select-String -Path .\flutter\lib\generated_bridge.dart -Pattern '^typedef bool ' -Quiet)
+}
+
 function New-Bridge {
-    if (-not $RegenBridge -and (Test-Path .\src\bridge_generated.rs) -and
-        (Test-Path .\flutter\lib\generated_bridge.dart)) { return }
+    if (-not $RegenBridge -and (Test-Bridge)) { return }
     if (-not (Get-Command flutter_rust_bridge_codegen -ErrorAction SilentlyContinue) -or
         -not (Get-Command cargo-expand -ErrorAction SilentlyContinue)) {
         Fail ("generating the flutter_rust_bridge glue needs flutter_rust_bridge_codegen and cargo-expand:`n" +
@@ -246,6 +253,7 @@ function New-Bridge {
         '--dart-output', './flutter/lib/generated_bridge.dart',
         '--c-output', './flutter/macos/Runner/bridge_generated.h')
     Copy-Item -Force .\flutter\macos\Runner\bridge_generated.h .\flutter\ios\Runner\bridge_generated.h
+    if (-not (Test-Bridge)) { Fail "the generated bridge mistypes bool/int64_t: libclang couldn't find the C headers (stdbool.h, stdint.h)" }
 }
 
 # Load the MSVC developer environment (INCLUDE/LIB/LIBPATH) from the Visual
@@ -348,6 +356,8 @@ Invoke-Native $Py $ConfigureArgs
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 Push-Location $Vendor
 try {
+    # The bridge generator's libclang needs the MSVC/Windows SDK headers too.
+    Import-MsvcEnv
     New-Bridge
     foreach ($t in $Targets) {
         switch ($t) {
