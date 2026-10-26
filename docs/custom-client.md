@@ -72,7 +72,7 @@ are pinned to match RustDesk 1.5.0's own CI.
 
 ## Build locally
 
-`client/build-client.sh` builds one or more targets; each has to be built on
+`client/build-client.sh --target …` builds one or more targets (comma-separated); each has to be built on
 its own kind of host:
 
 | Target | Output in `client/dist/` | Build host |
@@ -99,9 +99,9 @@ NDK `r28c` in `ANDROID_NDK_HOME` and `cargo-ndk` (android); Xcode + CocoaPods
 
 ```sh
 RENDEZVOUS_SERVER=rd.example.com:21116 RS_PUB_KEY="$(cat id_ed25519.pub)" \
-    client/build-client.sh android linux
+    client/build-client.sh --target android,linux
 client/build-client.sh --id-server rd.example.com:21116 --key 'KEY=' \
-    --password 'a-strong-shared-secret' macos ios        # on a Mac
+    --password 'a-strong-shared-secret' --target macos,ios   # on a Mac
 client/build-client.sh --help
 ```
 
@@ -109,7 +109,7 @@ On Windows, use the PowerShell script (targets `windows`, `android`):
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass   # if scripts are blocked
-.\client\build-client.ps1 windows -IdServer rd.example.com:21116 -Key (Get-Content id_ed25519.pub) `
+.\client\build-client.ps1 -Target windows -IdServer rd.example.com:21116 -Key (Get-Content id_ed25519.pub) `
     -Password 'a-strong-shared-secret'
 Get-Help .\client\build-client.ps1 -Detailed   # or: .\client\build-client.ps1 -Help
 ```

@@ -27,12 +27,12 @@ CARGO_EXPAND_VERSION="1.0.95"
 
 usage() {
   cat <<'EOF'
-Usage: client/build-client.sh [options] TARGET [TARGET...]
+Usage: client/build-client.sh [options] --target TARGET[,TARGET...]
 
 Bake your RussDesk server settings into the vendored RustDesk client and build it.
 Artifacts are copied to client/dist/.
 
-Targets (default: android). Each must be built on the host shown:
+Targets for --target (default: android). Each must be built on the host shown:
   windows   portable russdesk-<host>-windows-x64.exe       Windows (Git Bash/MSYS)
                                                             or use client/build-client.ps1
   android   russdesk-<host>-android-<abi>.apk (arm64-v8a, armeabi-v7a)
@@ -50,7 +50,8 @@ Options (each can also come from the environment variable shown):
   --api-server URL         default API server; derived from ID server if unset [API_SERVER]
   --password PASS          shared permanent password for unattended access;  [UNATTENDED_PASSWORD]
                            only its SHA256 hash is baked into the binary
-  -t, --target TARGET      same as a positional TARGET; repeatable
+  -t, --target LIST        what to build: comma-separated and/or repeated,
+                           e.g. --target macos,ios  or  -t android -t linux
   --regen-bridge           regenerate the flutter_rust_bridge glue even if present
   --check                  validate and show the config.rs changes, then exit (no build)
   -h, --help               show this help and exit
@@ -70,9 +71,9 @@ or GET /api/admin/client-config.
 
 Examples:
   RENDEZVOUS_SERVER=rd.example.com:31116 RS_PUB_KEY="$(cat id_ed25519.pub)" \
-      client/build-client.sh android
+      client/build-client.sh --target android
   client/build-client.sh --id-server rd.example.com:31116 --key 'KEY=' \
-      --password 'a-strong-shared-secret' macos ios
+      --password 'a-strong-shared-secret' --target macos,ios
   client/build-client.sh --id-server rd.example.com:31116 --key 'KEY=' --check
 EOF
 }
@@ -90,6 +91,11 @@ REGEN_BRIDGE=0
 val() { [ $# -ge 2 ] || { echo "error: $1 needs a value (see --help)" >&2; exit 2; }; }
 
 add_target() {
+  local IFS=,
+  local t
+  for t in $1; do add_one_target "$t"; done
+}
+add_one_target() {
   case "$1" in
     windows|win) TARGETS+=(windows) ;;
     android) TARGETS+=(android) ;;
@@ -112,7 +118,7 @@ while [ $# -gt 0 ]; do
     --check) CHECK=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "error: unknown option: $1 (see --help)" >&2; exit 2 ;;
-    *) add_target "$1"; shift ;;
+    *) echo "error: unexpected argument: $1 (choose targets with --target; see --help)" >&2; exit 2 ;;
   esac
 done
 [ ${#TARGETS[@]} -gt 0 ] || TARGETS=(android)

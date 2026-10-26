@@ -29,7 +29,7 @@
     or GET /api/admin/client-config.
 
 .PARAMETER Target
-    One or more of: windows (default), android. Also accepts macos, ios,
+    What to build, comma-separated (-Target windows,android). One or more of: windows (default), android. Also accepts macos, ios,
     iphone, linux only to tell you to use build-client.sh on that host.
 
 .PARAMETER IdServer
@@ -61,7 +61,7 @@
     .\client\build-client.ps1 -IdServer rd.example.com:31116 -Key (Get-Content id_ed25519.pub)
 
 .EXAMPLE
-    .\client\build-client.ps1 windows,android -IdServer rd.example.com:31116 -Key 'KEY=' -Password 'a-strong-shared-secret'
+    .\client\build-client.ps1 -Target windows,android -IdServer rd.example.com:31116 -Key 'KEY=' -Password 'a-strong-shared-secret'
 
 .EXAMPLE
     $env:RENDEZVOUS_SERVER = 'rd.example.com:31116'; $env:RS_PUB_KEY = 'KEY='
@@ -71,9 +71,8 @@
     If scripts are blocked, run once per session:
         Set-ExecutionPolicy -Scope Process Bypass
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
-    [Parameter(Position = 0)]
     [ValidateSet('windows', 'android', 'macos', 'ios', 'iphone', 'linux')]
     [string[]]$Target = @('windows'),
     [string]$IdServer = $env:RENDEZVOUS_SERVER,
