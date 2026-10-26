@@ -78,6 +78,18 @@ for Android — the NDK `r28c` with `ANDROID_NDK_HOME` set):
 ```sh
 RENDEZVOUS_SERVER=rd.example.com:21116 RS_PUB_KEY="$(cat id_ed25519.pub)" \
     client/build-client.sh android      # or: windows | linux
+client/build-client.sh --help           # all options (--relay, --api-server, --password, --check)
+```
+
+On Windows, use the PowerShell script (also needs Visual Studio 2022 C++ build
+tools and vcpkg with `libvpx libyuv opus aom` for `x64-windows-static`, with
+`VCPKG_ROOT` set). It builds the same single-file portable exe as CI:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass   # if scripts are blocked
+.\client\build-client.ps1 -IdServer rd.example.com:21116 -Key (Get-Content id_ed25519.pub) `
+    -Password 'a-strong-shared-secret'      # -Target android also works (needs Git Bash)
+Get-Help .\client\build-client.ps1 -Detailed   # or: .\client\build-client.ps1 -Help
 ```
 
 Artifacts are copied to `client/dist/`. The script re-bakes `config.rs` from a
