@@ -93,6 +93,8 @@ cargo install cargo-expand --version 1.0.95 --locked
 cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
 ```
 
+Step-by-step install instructions per OS (including Windows): [client/README.md](../client/README.md#installation-requirements).
+
 Per-target extras: Visual Studio 2022 C++ tools + LLVM (windows); Java 17,
 NDK `r28c` in `ANDROID_NDK_HOME` and `cargo-ndk` (android); Xcode + CocoaPods
 (macos, ios). `--help` lists everything.

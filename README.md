@@ -27,7 +27,7 @@ public documentation):
 | **Settings** | Server addresses and key, config string / QR / **Windows EXE name**, **SMTP** (with test mail), **API tokens**, Others (log retention, sharing policy, *Disable retrieving accessible devices*, login lifetime, recordings). |
 | **Automation** | `rustdesk --assign --token …` works, and RustDesk Server Pro's own scripts (`users.py`, `devices.py`, `user-groups.py`, `device-groups.py`, `strategies.py`, `ab.py`, `audits.py` from the RustDesk repo) run unmodified against RussDesk. The Rust tests replay their request shapes. |
 | **Custom client presets** | `preset-user-name`, `preset-device-group-name`, `preset-strategy-name`, `preset-address-book-*`, `preset-note` are honoured on first check-in. |
-| **Custom client build** | The RustDesk client is vendored under `client/vendor`; a script and a GitHub Actions workflow bake your ID server, relay server and key in at compile time, producing an `.exe` / `.apk` that connects to your server with no manual setup. See [docs/custom-client.md](docs/custom-client.md). |
+| **Custom client build** | The RustDesk client is vendored under `client/vendor`; a script and a GitHub Actions workflow bake your ID server, relay server and key in at compile time, producing an `.exe` / `.apk` that connects to your server with no manual setup. See [docs/custom-client.md](docs/custom-client.md); toolchain to install: [client/README.md](client/README.md#installation-requirements). |
 
 ### Not available, and why
 
