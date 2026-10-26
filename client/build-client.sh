@@ -132,7 +132,13 @@ if [ ! -f "$CONFIG_RS" ]; then
   exit 1
 fi
 
-PY="$(command -v python3 || command -v python || true)"
+# Use the first python that actually runs Python 3: on Windows, python3 is often
+# the Microsoft Store placeholder, which exists without Python being installed.
+PY=""
+for c in python3 python; do
+  p="$(command -v "$c" 2>/dev/null)" || continue
+  if "$p" -c 'import sys; sys.exit(sys.version_info[0] < 3)' >/dev/null 2>&1; then PY="$p"; break; fi
+done
 [ -n "$PY" ] || { echo "error: python3 is required" >&2; exit 1; }
 
 if [ "$CHECK" -eq 1 ]; then
