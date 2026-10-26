@@ -157,6 +157,7 @@ function Need([string]$Command, [string]$For) {
 # Run a native command and stop on a non-zero exit code ($ErrorActionPreference
 # doesn't cover external programs).
 function Invoke-Native([string]$Exe, [string[]]$Arguments) {
+    if (-not $Exe) { Fail "internal: no program to run for arguments '$($Arguments -join ' ')'" }
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { Fail "'$Exe $($Arguments -join ' ')' failed (exit $LASTEXITCODE)" $LASTEXITCODE }
 }
@@ -185,16 +186,18 @@ if (-not (Test-Path $ConfigRs)) {
     Fail "vendored client not found at $Vendor (is client\vendor populated?)"
 }
 
-# "python" on Windows; fall back to the py launcher. Skip the Microsoft Store
-# stub in WindowsApps, which exists without Python being installed.
+# "python" / "python3" on Windows; fall back to the py launcher. Only real
+# executables count: an alias or function named python has no path, and the
+# Microsoft Store stub in WindowsApps exists without Python being installed.
 $Py = $null
 $PyArgs = @()
-$found = Get-Command python -ErrorAction SilentlyContinue |
-    Where-Object { $_.Source -notlike '*\WindowsApps\*' } | Select-Object -First 1
+$found = Get-Command python, python3 -CommandType Application -ErrorAction SilentlyContinue |
+    Where-Object { $_.Source -and $_.Source -notlike '*\WindowsApps\*' } | Select-Object -First 1
+$launcher = Get-Command py -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($found) {
     $Py = $found.Source
-} elseif (Get-Command py -ErrorAction SilentlyContinue) {
-    $Py = 'py'; $PyArgs = @('-3')
+} elseif ($launcher) {
+    $Py = $launcher.Source; $PyArgs = @('-3')
 } else {
     Fail 'Python 3 is required (python or the py launcher)'
 }
