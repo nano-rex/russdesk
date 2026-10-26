@@ -270,6 +270,10 @@ function Build-Windows {
     Import-MsvcEnv
     Install-VcpkgDeps 'x64-windows-static'
     Write-Host '==> Building Windows client (flutter + cargo)'
+    # Recreate the plugin links as this process: Windows refuses to let an elevated
+    # build follow links a non-elevated run created ("untrusted mount point").
+    $links = '.\flutter\windows\flutter\ephemeral\.plugin_symlinks'
+    if (Test-Path $links) { cmd.exe /c rmdir /s /q $links }
     Push-Location .\flutter
     try { Invoke-Native flutter @('pub', 'get') } finally { Pop-Location }
     Invoke-Native $Py ($PyArgs + @('build.py', '--portable', '--flutter', '--skip-portable-pack'))

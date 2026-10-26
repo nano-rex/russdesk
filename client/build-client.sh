@@ -246,6 +246,9 @@ build_windows() {
   msvc_env
   vcpkg_install x64-windows-static
   echo "==> Building Windows client (flutter + cargo)"
+  # Recreate the plugin links as this process: Windows refuses to let an elevated
+  # build follow links a non-elevated run created ("untrusted mount point").
+  rm -rf flutter/windows/flutter/ephemeral/.plugin_symlinks
   ( cd flutter && flutter pub get )
   "$PY" build.py --portable --flutter --skip-portable-pack
   echo "==> Packing single-file portable exe"
