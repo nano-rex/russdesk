@@ -41,7 +41,10 @@
   function askPassword(msg) {
     $("otitle").textContent = "Password needed";
     $("omsg").textContent = "Enter the device's permanent password.";
-    $("err").textContent = msg && /refused|wrong/i.test(msg) ? "Wrong password, try again." : "";
+    // Only call it a wrong password when the device says so; otherwise show its reason
+    // (e.g. a device set to accept sessions by click only).
+    const reason = (msg || "").replace(/^login refused:\s*/i, "");
+    $("err").textContent = !msg ? "" : /password/i.test(reason) ? "Wrong password, try again." : reason;
     $("pwbox").hidden = false;
     $("overlay").hidden = false;
     $("pw").focus();

@@ -256,8 +256,10 @@ class Viewer {
     const pw = new TextEncoder().encode(this.cfg.password);
     const h1 = await sha256(pw, new TextEncoder().encode(salt));
     const h2 = await sha256(h1, new TextEncoder().encode(challenge));
-    // OptionMessage{ supported_decoding=10{ ability_h264=2:1, prefer=4:H264(2) } }
-    const option = pbFields([[10, pbFields([[2, 1], [4, 2]])]]);
+    // OptionMessage{ supported_decoding=10{ ability_vp9=1, ability_h264=2, prefer=4:H264(2),
+    // ability_vp8=5 } }. H264 is preferred, but a device can only encode it with hardware
+    // support, so VP9/VP8 (which every browser's WebCodecs decodes) keep other devices working.
+    const option = pbFields([[10, pbFields([[1, 1], [2, 1], [4, 2], [5, 1]])]]);
     const lr = pbFields([[1, this.cfg.device_id], [2, h2], [4, randId()], [5, this.cfg.name || "RussDesk"],
                          [6, option], [9, true], [10, randId()], [11, "1.4.2"], [13, "Linux"]]);
     this._send(wrap(M.login_request, lr));
@@ -276,16 +278,20 @@ class Viewer {
     }
   }
 
-  _configureDecoder(annexb) {
-    // Build the H264 codec string from the SPS in the keyframe (Annex B).
-    let codec = "avc1.42E01E";
-    for (let i = 0; i + 4 < annexb.length; i++) {
-      if (annexb[i] === 0 && annexb[i + 1] === 0 && annexb[i + 2] === 1 && (annexb[i + 3] & 0x1F) === 7) {
-        const p = annexb[i + 4], c = annexb[i + 5], l = annexb[i + 6];
-        codec = "avc1." + [p, c, l].map((x) => x.toString(16).padStart(2, "0")).join("");
-        break;
+  _configureDecoder(kind, keyframe) {
+    let codec = kind === "vp9" ? "vp09.00.10.08" : kind === "vp8" ? "vp8" : "avc1.42E01E";
+    if (kind === "h264") {
+      // Build the H264 codec string from the SPS in the keyframe (Annex B).
+      for (let i = 0; i + 4 < keyframe.length; i++) {
+        if (keyframe[i] === 0 && keyframe[i + 1] === 0 && keyframe[i + 2] === 1 && (keyframe[i + 3] & 0x1F) === 7) {
+          const p = keyframe[i + 4], c = keyframe[i + 5], l = keyframe[i + 6];
+          codec = "avc1." + [p, c, l].map((x) => x.toString(16).padStart(2, "0")).join("");
+          break;
+        }
       }
     }
+    if (this.decoder && this.decoder.state !== "closed") this.decoder.close();
+    this.codecKind = kind;
     this.decoder = new VideoDecoder({
       output: (frame) => { try { this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height); } finally { frame.close(); } },
       error: (e) => this.status("decoder error: " + e.message),
@@ -295,27 +301,28 @@ class Viewer {
   }
 
   async _videoLoop() {
-    let started = false, ts = 0;
+    let ts = 0;
     while (!this.stop) {
       let m;
       try { m = await this._recv(); } catch (e) { if (!this.stop) this.status("disconnected: " + e.message); return; }
       const vf = first(m, M.video_frame);
       if (!vf) continue;
       const frames = unpb(vf);
-      const h264 = frames[10] || [];
-      for (const evs of h264) {
-        for (const ev of (unpb(evs)[1] || [])) {
-          const e = unpb(ev);
-          const data = first(e, 1);
-          const key = asInt(e, 2) ? true : asBool(e, 2);
-          if (!started) {
-            if (!(key || asBool(e, 2))) continue;  // wait for a keyframe
-            this._configureDecoder(data);
-            started = true;
+      // VideoFrame oneof: vp9s=6, h264s=10, vp8s=12. The device may switch codec mid-session
+      // (e.g. when another viewer connects), so (re)configure on the first keyframe of each.
+      for (const [field, kind] of [[10, "h264"], [6, "vp9"], [12, "vp8"]]) {
+        for (const evs of (frames[field] || [])) {
+          for (const ev of (unpb(evs)[1] || [])) {
+            const e = unpb(ev);
+            const data = first(e, 1);
+            const key = asInt(e, 2) ? true : asBool(e, 2);
+            if (this.codecKind !== kind) {
+              if (!key) continue;  // wait for a keyframe
+              this._configureDecoder(kind, data);
+            }
+            this.decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: ts, data }));
+            ts += 1000000 / 30;
           }
-          this.decoder.decode(new EncodedVideoChunk({
-            type: (key || asBool(e, 2)) ? "key" : "delta", timestamp: ts, data }));
-          ts += 1000000 / 30;
         }
       }
     }
