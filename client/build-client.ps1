@@ -248,8 +248,26 @@ function New-Bridge {
     Copy-Item -Force .\flutter\macos\Runner\bridge_generated.h .\flutter\ios\Runner\bridge_generated.h
 }
 
+# Load the MSVC developer environment (INCLUDE/LIB/LIBPATH) from the Visual
+# Studio that actually has the C++ tools. Without it, bindgen's libclang picks the
+# newest VS install, which may lack them, and fails on 'stdlib.h' not found.
+function Import-MsvcEnv {
+    if ($env:INCLUDE) { return }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) { Fail 'Visual Studio Installer (vswhere.exe) not found; install the VS 2022 C++ Build Tools' }
+    $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (-not $vs) { Fail 'no Visual Studio with the C++ tools (VC.Tools.x86.x64) found; install the VS 2022 C++ Build Tools' }
+    Write-Host "==> Using MSVC environment from $vs"
+    $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+    foreach ($line in (& cmd.exe /c "call `"$vcvars`" >nul && set")) {
+        if ($line -match '^(INCLUDE|LIB|LIBPATH)=(.*)$') { Set-Item "env:$($Matches[1])" $Matches[2] }
+    }
+    if (-not $env:INCLUDE) { Fail "vcvars64.bat from $vs did not set INCLUDE" }
+}
+
 function Build-Windows {
     Need flutter windows; Need cargo windows
+    Import-MsvcEnv
     Install-VcpkgDeps 'x64-windows-static'
     Write-Host '==> Building Windows client (flutter + cargo)'
     Push-Location .\flutter

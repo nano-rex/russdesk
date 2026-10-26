@@ -220,8 +220,30 @@ EOF
   cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
 }
 
+# Load the MSVC developer environment (INCLUDE/LIB/LIBPATH) from the Visual
+# Studio that actually has the C++ tools. Without it, bindgen's libclang picks the
+# newest VS install, which may lack them, and fails on 'stdlib.h' not found.
+msvc_env() {
+  [ -z "${INCLUDE:-}" ] || return 0
+  local vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+  [ -x "$vswhere" ] || { echo "error: Visual Studio Installer (vswhere.exe) not found; install the VS 2022 C++ Build Tools" >&2; exit 1; }
+  local vs
+  vs=$("$vswhere" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | tr -d '\r')
+  [ -n "$vs" ] || { echo "error: no Visual Studio with the C++ tools (VC.Tools.x86.x64) found; install the VS 2022 C++ Build Tools" >&2; exit 1; }
+  echo "==> Using MSVC environment from $vs"
+  local bat; bat="$(mktemp -d)/msvc-env.bat"
+  printf '@call "%s\\VC\\Auxiliary\\Build\\vcvars64.bat" >nul\r\n@set\r\n' "$vs" > "$bat"
+  local k v
+  while IFS='=' read -r k v; do
+    case "$k" in INCLUDE|LIB|LIBPATH) export "$k=${v%$'\r'}" ;; esac
+  done < <(cmd //c "$(cygpath -w "$bat")")
+  rm -rf "$(dirname "$bat")"
+  [ -n "${INCLUDE:-}" ] || { echo "error: vcvars64.bat from $vs did not set INCLUDE" >&2; exit 1; }
+}
+
 build_windows() {
   need flutter windows; need cargo windows
+  msvc_env
   vcpkg_install x64-windows-static
   echo "==> Building Windows client (flutter + cargo)"
   ( cd flutter && flutter pub get )
