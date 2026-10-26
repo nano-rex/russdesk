@@ -151,7 +151,7 @@ jobs:
         env:
           VCPKG_ROOT: "C:/vcpkg"
         run: |
-          flutter pub get
+          ( cd flutter && flutter pub get )
           python build.py --portable --flutter --skip-portable-pack
 
       - name: Package single-file portable exe

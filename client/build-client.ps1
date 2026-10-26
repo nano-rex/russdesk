@@ -252,7 +252,8 @@ function Build-Windows {
     Need flutter windows; Need cargo windows
     Install-VcpkgDeps 'x64-windows-static'
     Write-Host '==> Building Windows client (flutter + cargo)'
-    Invoke-Native flutter @('pub', 'get')
+    Push-Location .\flutter
+    try { Invoke-Native flutter @('pub', 'get') } finally { Pop-Location }
     Invoke-Native $Py ($PyArgs + @('build.py', '--portable', '--flutter', '--skip-portable-pack'))
 
     Write-Host '==> Packing single-file portable exe'

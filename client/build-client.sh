@@ -224,7 +224,7 @@ build_windows() {
   need flutter windows; need cargo windows
   vcpkg_install x64-windows-static
   echo "==> Building Windows client (flutter + cargo)"
-  flutter pub get
+  ( cd flutter && flutter pub get )
   "$PY" build.py --portable --flutter --skip-portable-pack
   echo "==> Packing single-file portable exe"
   rm -rf ./rustdesk
